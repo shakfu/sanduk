@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from sanduk import runtime
-from sanduk.agent import BASE_URL_ENV, KEY_ENV
+from sanduk.agent import BASE_URL_ENV, KEY_ENV, agent_names, get_agent
 from sanduk.cli import build_spec, parse_args, relay_root, select
 from sanduk.errors import AgentboxError
 from sanduk.runtime import ContainerSpec, Mount, get_runtime
@@ -362,6 +362,56 @@ def test_a_failed_listing_is_empty_not_an_error(monkeypatch, engine):
 
 
 # --- images, networks, and the engine's own service --------------------------
+
+
+def uid(monkeypatch, value, gid=121):
+    monkeypatch.setattr(runtime.os, "getuid", lambda: value)
+    monkeypatch.setattr(runtime.os, "getgid", lambda: gid)
+
+
+def test_docker_builds_the_agent_as_the_caller(monkeypatch, tmp_path):
+    """A native daemon keeps host ownership on a bind mount: a uid-1000 agent
+    could not write a uid-1001 workdir, which is GitHub's runner."""
+    (tmp_path / "Containerfile").write_text("FROM scratch\n")
+    uid(monkeypatch, 1001)
+    calls = responses(monkeypatch)
+    get_runtime("docker").build_image("sanduk:latest", tmp_path / "Containerfile")
+    argv = calls[0]
+    assert argv[2:4] == ["--build-arg", "AGENT_UID=1001"]
+    assert argv[4:6] == ["--build-arg", "AGENT_GID=121"]
+    assert argv[-1] == str(tmp_path)
+
+
+def test_root_builds_the_default_agent_user(monkeypatch):
+    """uid 0 inside the image would make the agent root there."""
+    uid(monkeypatch, 0, gid=0)
+    assert get_runtime("docker").build_args() == []
+
+
+def test_apple_passes_no_build_args(monkeypatch):
+    """Its mounts already let uid 1000 write a directory the host user owns."""
+    uid(monkeypatch, 1001)
+    assert get_runtime("apple").build_args() == []
+
+
+@pytest.mark.parametrize("name", agent_names())
+def test_every_image_takes_the_callers_uid(name):
+    """Docker only warns about an unused --build-arg, so an image without the
+    ARG would build and then fail to write its mount."""
+    text = get_agent(name).containerfile.read_text()
+    assert "ARG AGENT_UID=1000" in text and "ARG AGENT_GID=1000" in text
+    assert "LABEL sanduk.agent-uid=$AGENT_UID" in text
+
+
+@pytest.mark.parametrize(
+    ("stdout", "uid"),
+    [('{"sanduk.agent-uid": "1001"}\n', 1001), ("null\n", None), ("", None)],
+)
+def test_docker_reads_the_agents_uid_from_its_label(monkeypatch, stdout, uid):
+    """null is an image with no labels; empty is a failed inspect."""
+    calls = responses(monkeypatch, stdout=stdout)
+    assert get_runtime("docker").image_uid("sanduk:latest") == uid
+    assert calls[0][-1] == "sanduk:latest"
 
 
 @pytest.mark.parametrize(("engine", "verb"), [("apple", "delete"), ("docker", "rm")])

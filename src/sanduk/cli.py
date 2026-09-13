@@ -21,6 +21,7 @@ import secrets
 import shlex
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -44,6 +45,7 @@ from sanduk.agent import (
     launch,
     registry,
 )
+from sanduk.agents import BUILTIN
 from sanduk.errors import AgentboxError
 from sanduk.preflight import firewall_warning, validate_key
 from sanduk.providers import (
@@ -62,6 +64,7 @@ from sanduk.runtime import (
     Container,
     ContainerSpec,
     Mount,
+    Runtime,
     get_runtime,
     wait_for_gateway,
 )
@@ -840,6 +843,48 @@ def _exit_on_signal(signum: int, _frame: object) -> None:
     raise SystemExit(128 + signum)
 
 
+def ensure_image(
+    runtime: Runtime, args: argparse.Namespace, sel: Selection, workdir: Path
+) -> None:
+    """Build the image if it is missing, then refuse one whose agent cannot
+    write `workdir`. Before any container starts: an agent that cannot write
+    its report still spends the whole run's tokens."""
+    if args.rebuild or not runtime.image_exists(sel.image):
+        runtime.build_image(sel.image, sel.containerfile)
+    if not runtime.keeps_mount_owner:
+        return
+    uid = runtime.image_uid(sel.image)
+    if uid is None:
+        # A shipped image built before the label ran as 1000. Anything else
+        # may run as anyone, so it is not refused on a guess.
+        if args.image or args.containerfile or not isinstance(sel.agent, BUILTIN):
+            return
+        uid = 1000
+    try:
+        st = workdir.stat()
+    except FileNotFoundError:
+        owner = os.getuid()  # run creates it
+    else:
+        # Group or other write may let the agent in; only a sure refusal stops a run.
+        if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            return
+        owner = st.st_uid
+    if uid == owner:
+        return
+    if owner == 0:
+        fix = "sanduk builds no agent as uid 0; use a workdir a non-root user owns"
+    else:
+        image = f" --image {args.image}" if args.image else ""
+        fix = (
+            f"rebuild it as uid {owner}: sanduk build --force --agent "
+            f"{sel.agent.name}{image} --runtime {args.runtime}"
+        )
+    raise AgentboxError(
+        f"{sel.image} runs its agent as uid {uid}, which cannot write {workdir} "
+        f"(owned by uid {owner}): {fix}"
+    )
+
+
 def run(args: argparse.Namespace) -> int:
     runtime = get_runtime(args.runtime)
     if args.oci_runtime and not runtime.takes_oci_runtime:
@@ -881,8 +926,7 @@ def run(args: argparse.Namespace) -> int:
         gateway, _ = runtime.ensure_network(network, internal=not args.egress)
         token = secrets.token_urlsafe(24)
         if not args.dry_run:
-            if args.rebuild or not runtime.image_exists(sel.image):
-                runtime.build_image(sel.image, sel.containerfile)
+            ensure_image(runtime, args, sel, workdir)
             record = claim(args.runtime, name)
             # Outlive the run: the holder going first takes the bridge, and
             # the relay's address, with it.
@@ -925,6 +969,8 @@ def run(args: argparse.Namespace) -> int:
         return 0
 
     runtime.require_run()
+    if not args.proxy:  # the relayed path settled its image above
+        ensure_image(runtime, args, sel, workdir)
     # Not before the dry-run return above, and not before the key check: until
     # a run is about to start, the previous report is still the only result
     # there is, and a command that only prints its argv must not destroy it.
@@ -933,8 +979,6 @@ def run(args: argparse.Namespace) -> int:
     # last agent left would survive to shadow this run's report.
     (workdir / REPORT_NAME).unlink(missing_ok=True)
     sweep()
-    if args.rebuild or not runtime.image_exists(sel.image):
-        runtime.build_image(sel.image, sel.containerfile)
     if record is None:
         record = claim(args.runtime, name)
 

@@ -99,6 +99,8 @@ def test_a_line_that_is_not_a_record_reaches_the_reader_as_text():
 class Engine:
     """Runs the stand-in agent in place of a container, and records teardown."""
 
+    keeps_mount_owner = False
+
     def __init__(self, argv):
         self.argv, self.names, self.destroyed = argv, [], []
 

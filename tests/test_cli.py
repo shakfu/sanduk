@@ -18,9 +18,11 @@ from sanduk.cli import (
     MAX_TIMEOUT,
     _collect_report,
     agent_stats,
+    ensure_image,
     main,
     parse_args,
     parse_mounts,
+    select,
 )
 from sanduk.errors import AgentboxError
 from sanduk.runs import runs_dir
@@ -347,6 +349,11 @@ def test_list_takes_no_engine_flags():
 
 class StubEngine:
     cli = "stub"
+    keeps_mount_owner = False
+    uid = None
+
+    def image_uid(self, image):
+        return self.uid
 
     def __init__(self, containers=(), images=()):
         self.containers = list(containers)
@@ -423,6 +430,86 @@ def test_force_rebuilds_an_existing_image(engine):
     engine.images.add("sanduk:latest")
     main(["build", "--force"])
     assert engine.built == [("sanduk:latest", ClaudeCode.containerfile)]
+
+
+class OwnerEngine(StubEngine):
+    """Docker's side of the check, with the image already built."""
+
+    keeps_mount_owner = True
+
+    def __init__(self, uid):
+        super().__init__(images={"sanduk:latest"})
+        self.uid = uid
+
+    def run_argv(self, spec):
+        return ["stub", "run", spec.image]
+
+
+def workdir_of(uid, mode=0o755):
+    """A workdir whose stat() answers as `uid` owns it."""
+    st = os.stat_result((0o040000 | mode, 0, 0, 0, uid, 0, 0, 0, 0, 0))
+    return SimpleNamespace(stat=lambda: st)
+
+
+def check(engine, workdir, *flags):
+    args = parse_args(["run", "task", *flags])
+    ensure_image(engine, args, select(args), workdir)
+
+
+def test_an_image_whose_agent_cannot_write_the_workdir_is_refused():
+    """A uid-1000 agent on a native daemon cannot write a uid-1001 workdir, and
+    only finds out after the run has spent its tokens."""
+    engine = OwnerEngine(uid=1000)
+    with pytest.raises(AgentboxError, match=r"uid 1000.*uid 1001.*sanduk build --force"):
+        check(engine, workdir_of(1001))
+    assert engine.built == []
+
+
+def test_an_image_built_as_the_owner_passes():
+    check(OwnerEngine(uid=1001), workdir_of(1001))
+
+
+def test_an_unlabelled_shipped_image_ran_as_1000():
+    """Every Docker image built before the label: the case the check exists for."""
+    with pytest.raises(AgentboxError, match="uid 1000"):
+        check(OwnerEngine(uid=None), workdir_of(1001))
+
+
+def test_an_unlabelled_image_of_the_users_own_is_not_guessed_at():
+    check(OwnerEngine(uid=None), workdir_of(1001), "--image", "mine:latest")
+
+
+def test_a_group_writable_workdir_is_not_refused():
+    """The agent may get in through the group, which the label does not record."""
+    check(OwnerEngine(uid=1000), workdir_of(1001, mode=0o775))
+
+
+def test_a_workdir_run_will_create_is_owned_by_the_caller(tmp_path):
+    with pytest.raises(AgentboxError, match=f"uid {os.getuid()}"):
+        check(OwnerEngine(uid=os.getuid() + 1), tmp_path / "new")
+
+
+def test_a_root_workdir_is_not_answered_with_a_rebuild():
+    """Root builds keep uid 1000, so rebuilding as root would change nothing."""
+    with pytest.raises(AgentboxError, match="uid 0") as e:
+        check(OwnerEngine(uid=1000), workdir_of(0))
+    assert "build --force" not in str(e.value)
+
+
+def test_an_engine_that_maps_ownership_is_not_checked():
+    check(StubEngine(images={"sanduk:latest"}), workdir_of(1001))
+
+
+def test_a_refused_image_leaves_an_existing_report_alone(tmp_path, monkeypatch):
+    """Refused before the report is cleared: nothing ran, so the last result stands."""
+    stale = tmp_path / REPORT_NAME
+    stale.write_text("from a previous run")
+    engine = OwnerEngine(uid=os.getuid() + 1)
+    monkeypatch.setattr("sanduk.cli.get_runtime", lambda _: engine)
+    argv = ["run", "summarise", "-w", str(tmp_path), "--skip-key-check"]
+    assert main(argv) == 2
+    assert stale.read_text() == "from a previous run"
+    assert not runs_dir().exists() or list(runs_dir().iterdir()) == []
 
 
 def test_ps_prints_one_row_per_container(engine, capsys):

@@ -18,6 +18,7 @@ third engine that wants a different one overrides the method.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import socket
 import time
@@ -31,6 +32,9 @@ from sanduk.util import note, run
 # Every container sanduk starts is named from this, and every container it will
 # stop or delete is found by it. Nothing else is touched.
 CONTAINER_PREFIX = "sanduk-"
+
+# Set by every shipped Containerfile to the uid its agent runs as.
+AGENT_UID_LABEL = "sanduk.agent-uid"
 
 # How long the network holder sleeps when the caller does not say. A day, which
 # is what it always was; `run` sizes it to the run instead.
@@ -106,6 +110,9 @@ class Runtime:
     # class has no business knowing. Per engine, because Apple's CLI has
     # neither --pids-limit nor --security-opt.
     hardening: tuple[str, ...] = ("--cap-drop", "ALL", "--init")
+    # Whether a bind mount keeps host ownership inside the container, so the
+    # agent writes the workdir only as its owner. Apple's engine maps it.
+    keeps_mount_owner = False
 
     # --- preflight ----------------------------------------------------------
 
@@ -155,12 +162,21 @@ class Runtime:
         r = run([self.cli, "image", self.delete_verb, image], capture_output=True)
         note(f"deleted image {image}" if r.returncode == 0 else f"no image {image}")
 
+    def build_args(self) -> list[str]:
+        """Flags `build_image` adds for this engine."""
+        return []
+
+    def image_uid(self, image: str) -> int | None:
+        """The agent's uid from the image's label, or None if it has none."""
+        return None
+
     def build_image(self, image: str, containerfile: Path | str) -> None:
         cf = Path(containerfile).resolve()
         if not cf.is_file():
             raise AgentboxError(f"no Containerfile at {cf}")
         note(f"building {image} from {cf}")
-        r = run([self.cli, "build", "-t", image, "-f", str(cf), str(cf.parent)])
+        argv = [self.cli, "build", *self.build_args(), "-t", image, "-f", str(cf)]
+        r = run([*argv, str(cf.parent)])
         if r.returncode != 0:
             raise AgentboxError(f"build failed (exit {r.returncode})")
 
@@ -389,6 +405,7 @@ class Docker(Runtime):
         "1024",
     )
     delete_verb = "rm"
+    keeps_mount_owner = True
     install_hint = "Install from docs.docker.com/get-docker/."
     takes_oci_runtime = True
     needs_network_holder = False
@@ -418,6 +435,27 @@ class Docker(Runtime):
                 "no-new-privileges, and its /tmp is not this host's. Install "
                 "Docker Engine from docs.docker.com/engine/install/."
             )
+
+    def build_args(self) -> list[str]:
+        # A native daemon keeps host ownership on a bind mount, so an agent at
+        # uid 1000 cannot write a workdir owned by uid 1001. Root keeps the
+        # default: uid 0 inside would be root in the image.
+        if os.getuid() == 0:
+            return []
+        return [
+            "--build-arg",
+            f"AGENT_UID={os.getuid()}",
+            "--build-arg",
+            f"AGENT_GID={os.getgid()}",
+        ]
+
+    def image_uid(self, image: str) -> int | None:
+        labels = [self.cli, "image", "inspect", "--format", "{{json .Config.Labels}}"]
+        r = run([*labels, image], capture_output=True)
+        try:
+            return int((json.loads(r.stdout) or {})[AGENT_UID_LABEL])
+        except (ValueError, KeyError, TypeError):
+            return None
 
     def image_exists(self, image: str) -> bool:
         # inspect rather than a parsed listing: it answers the same for a tag, a

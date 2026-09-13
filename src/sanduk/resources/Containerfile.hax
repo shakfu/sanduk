@@ -21,7 +21,14 @@ RUN set -eux; \
       | tar -xz -C /usr/local/bin hax; \
     hax --version
 
-RUN useradd --create-home --uid 1000 agent && mkdir -p /work && chown agent:agent /work
+# The agent's uid and gid. Docker passes the caller's, so the agent can write a
+# bind mount the host user owns.
+ARG AGENT_UID=1000
+ARG AGENT_GID=1000
+LABEL sanduk.agent-uid=$AGENT_UID
+RUN groupadd -o -g "$AGENT_GID" agent \
+ && useradd -o --create-home --uid "$AGENT_UID" --gid agent agent \
+ && mkdir -p /work && chown agent:agent /work
 USER agent
 ENV HOME=/home/agent
 WORKDIR /work

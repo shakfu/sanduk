@@ -6,6 +6,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Under `--runtime docker` on Linux, the agent can write a workdir owned by a user other than uid 1000. Every image ran its agent as uid 1000, and a native daemon keeps host ownership on a bind mount, so the agent could not write `REPORT.md` into a uid-1001 directory. GitHub's runner is one such case; the mount test has failed in CI since 0.2.4. `sanduk build --runtime docker` now builds the agent user with the caller's uid and gid. `--user` at run time was the alternative, but it leaves `$HOME` owned by 1000, where the images keep their config. A root caller keeps uid 1000. See [docs/dev/podman.md](docs/dev/podman.md).
+
+  `run` now refuses such a mismatch before any container starts, and names the `sanduk build --force` that fixes it. The image records its agent's uid in the `sanduk.agent-uid` label. An unlabelled image of a shipped agent predates the fix and counts as uid 1000; that is every existing Docker image, which otherwise failed only after the run had spent its tokens. The check skips a group- or world-writable workdir, and any unlabelled image built with `--image` or `--containerfile`: the agent may still get in, and a false refusal has no workaround.
+
 - The host no longer resolves a symlink left at `REPORT.md`. The agent owns the mount, so a link there names a path the host walks and the container cannot reach -- a key, anything above the workspace. `shutil.copy` and `is_file()` both followed it, and with `-o` the target's contents reached the destination. The report is opened `O_NOFOLLOW` and `fstat`-ed for a regular file, rather than tested with `is_symlink()` first, which leaves the swap between test and open.
 
   Both ends of the copy need the guard, and so does the read back: an assistant loaded its outbox with `read_text`, so refusing the write and then following the link on the way in withheld nothing. Its reports directory is outside the mount by default, not by construction. The open also passes `O_NONBLOCK`, because a fifo at that name blocked it until something wrote, and the container that would have is deleted by then.

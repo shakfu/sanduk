@@ -57,8 +57,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN npm install -g @anthropic-ai/claude-code && npm cache clean --force
 
-# node:22-slim already ships uid 1000 as `node`; reuse it rather than adding one.
-RUN mkdir -p /work && chown node:node /work
+# The agent's uid and gid. Docker passes the caller's, so the agent can write a
+# bind mount the host user owns; the default is node's own.
+ARG AGENT_UID=1000
+ARG AGENT_GID=1000
+LABEL sanduk.agent-uid=$AGENT_UID
+RUN groupmod -o -g "$AGENT_GID" node && usermod -o -u "$AGENT_UID" -g "$AGENT_GID" node \
+ && mkdir -p /work && chown node:node /work
 USER node
 ENV HOME=/home/node \
     DISABLE_AUTOUPDATER=1 \

@@ -45,7 +45,7 @@ def test_line_continuations_survived_the_embedding():
     """A plain triple-quoted literal would splice these away and corrupt the
     build; the constant has to be a raw string."""
     lines = embedded_containerfile().splitlines()
-    assert sum(1 for line in lines if line.endswith("\\")) == 6
+    assert sum(1 for line in lines if line.endswith("\\")) == 7
 
 
 # The relay's implementation is no longer AST-comparable. The package's is

@@ -74,4 +74,6 @@ If Podman is wanted, C is the version worth building. It is a decision about whe
 
 ## Side finding: Docker and uid 1000
 
-Rootful Docker has the same mapping problem, unverified. The agent runs as uid 1000, and `run` creates `/work` as mode 0755, owned by whoever started sanduk. If that user is not uid 1000, the agent cannot write `REPORT.md`. GitHub's runner user is probably uid 1001 (inference). The CI wakeup test does not assert that a report exists.
+Confirmed by CI from v0.2.4 on. `test_the_workdir_mount_carries_files_both_ways` failed under Docker and runsc with `cat: in.txt: Permission denied`. The agent ran as uid 1000; pytest's `tmp_path` is mode 0700 and owned by the runner user.
+
+Fixed by building the image as the caller: `Docker.build_image` passes `AGENT_UID` and `AGENT_GID`. `--user` at run time was rejected: `$HOME` stays owned by 1000, and prime bakes its kernel and tools there. Root builds keep 1000. An image built by one user still fails for another user whose uid differs; `run` refuses that case up front, from the `sanduk.agent-uid` label.

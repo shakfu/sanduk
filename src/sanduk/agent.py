@@ -44,7 +44,7 @@ from sanduk.util import note
 RESOURCES = Path(__file__).parent / "resources"
 
 ENTRY_POINT_GROUP = "sanduk.agents"
-DEFAULT_AGENT = "claude"
+DEFAULT_AGENT = "codex"
 
 REPORT_NAME = "REPORT.md"
 REPORT_INSTRUCTION = (

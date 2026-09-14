@@ -30,7 +30,7 @@ from sanduk.runtime import ContainerSpec, get_runtime, wait_for_gateway
 
 pytestmark = pytest.mark.container
 
-ENGINE = get_runtime(os.environ.get("RUNTIME", "apple"))
+ENGINE = get_runtime(os.environ.get("RUNTIME"))
 AGENT = get_agent(os.environ.get("AGENT", "claude"))
 IMAGE = os.environ.get("IMAGE", AGENT.image)
 NETWORK = os.environ.get("NETWORK", "sanduk-net")

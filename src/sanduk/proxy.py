@@ -24,7 +24,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import cast
 from urllib.parse import urlsplit
 
-from sanduk.providers import ANTHROPIC, ANTHROPIC_PROVIDER, PROTOCOLS, Protocol, Provider
+from sanduk.providers import (
+    ANTHROPIC,
+    ANTHROPIC_PROVIDER,
+    OPENAI_CHAT,
+    PROTOCOLS,
+    Protocol,
+    Provider,
+)
 
 UPSTREAM = "api.anthropic.com"
 # Exact matches, not prefixes: "/v1/models" as a prefix also admits
@@ -204,8 +211,10 @@ class UsageSniffer:
             return
         if not isinstance(event, dict):
             return
-        message = event.get("message")
-        found = event.get("usage") or (message or {}).get("usage") or {}
+        # Anthropic nests it in message_start's `message`; a Responses stream
+        # in response.completed's `response`.
+        nested = event.get("message") or event.get("response")
+        found = event.get("usage") or (nested or {}).get("usage") or {}
         self.usage.update(_flatten(found))
 
     def digest(self, expected: bool = False) -> str:
@@ -313,7 +322,13 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(asked, int) or asked > cfg.max_tokens_cap:
                 payload[proto.cap_field] = cfg.max_tokens_cap
                 edited = True
-        if cfg.provider.stream_usage_option and payload.get("stream"):
+        # Chat Completions only: Responses rejects the field as unknown and
+        # reports usage in its final event unasked.
+        if (
+            cfg.provider.stream_usage_option
+            and proto.name == OPENAI_CHAT
+            and payload.get("stream")
+        ):
             options = payload.get("stream_options")
             if not isinstance(options, dict):
                 options = {}

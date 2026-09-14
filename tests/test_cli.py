@@ -12,8 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from sanduk import assistants
-from sanduk.agent import KEY_ENV, REPORT_NAME, Outcome
-from sanduk.agents.claude import ClaudeCode
+from sanduk.agent import REPORT_NAME, Outcome, get_agent
 from sanduk.cli import (
     MAX_TIMEOUT,
     _collect_report,
@@ -25,10 +24,14 @@ from sanduk.cli import (
     select,
 )
 from sanduk.errors import AgentboxError
+from sanduk.providers import get_provider
 from sanduk.runs import runs_dir
 from sanduk.runtime import Container
 
-KEY = "sk-ant-api03-SECRET"
+KEY = "sk-api03-SECRET"
+# The default run reads the default provider's key.
+KEY_ENV = get_provider().key_env
+IMAGE = get_agent().image
 
 
 @pytest.fixture(autouse=True)
@@ -295,9 +298,27 @@ def test_agent_env_names_can_be_overridden(tmp_path, monkeypatch):
 def test_agent_env_names_default_to_the_provider(tmp_path):
     from sanduk.cli import container_env_names, parse_args, resolve_provider
 
-    args = parse_args(["run", "task", "--provider", "anthropic"])
+    args = parse_args(["run", "task", "--agent", "claude", "--provider", "anthropic"])
     names = container_env_names(args, resolve_provider(args))
     assert names == ("ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL")
+
+
+@pytest.mark.parametrize(
+    ("argv", "model"),
+    [
+        ([], "gpt-5.6-luna"),
+        (["--model", "gpt-5"], "gpt-5"),
+        (["--agent", "claude", "--provider", "anthropic"], None),
+    ],
+)
+def test_select_fills_the_model_from_the_provider(argv, model):
+    """A GPT id sent to another provider would fail upstream, so only openai
+    supplies one."""
+    from sanduk.cli import parse_args, select
+
+    args = parse_args(["run", "task", *argv])
+    assert select(args).agent.name == ("claude" if "claude" in argv else "codex")
+    assert args.model == model
 
 
 # --- list -------------------------------------------------------------------
@@ -328,6 +349,18 @@ def test_list_runtimes_reports_what_is_installed(capsys):
     out = capsys.readouterr().out
     assert "apple" in out and "docker" in out
     assert "installed" in out
+
+
+def test_list_runtimes_marks_the_engine_a_run_would_pick(capsys, monkeypatch):
+    """docker alone is picked on every platform: last in macOS's order, only
+    entry elsewhere."""
+    monkeypatch.setattr(
+        "shutil.which", lambda cli: "/usr/bin/docker" if cli == "docker" else None
+    )
+    assert main(["list", "runtimes"]) == 0
+    rows = {line.split()[0]: line for line in capsys.readouterr().out.splitlines()}
+    assert rows["docker"].endswith("default")
+    assert "default" not in rows["apple"]
 
 
 def test_an_unknown_axis_is_rejected():
@@ -420,16 +453,16 @@ def test_build_uses_the_agents_image_and_containerfile(engine):
 
 
 def test_build_is_a_no_op_when_the_image_exists(engine, capsys):
-    engine.images.add("sanduk:latest")
+    engine.images.add(IMAGE)
     assert main(["build"]) == 0
     assert engine.built == []
     assert "already built" in capsys.readouterr().err
 
 
 def test_force_rebuilds_an_existing_image(engine):
-    engine.images.add("sanduk:latest")
+    engine.images.add(IMAGE)
     main(["build", "--force"])
-    assert engine.built == [("sanduk:latest", ClaudeCode.containerfile)]
+    assert engine.built == [(IMAGE, get_agent().containerfile)]
 
 
 class OwnerEngine(StubEngine):
@@ -438,7 +471,7 @@ class OwnerEngine(StubEngine):
     keeps_mount_owner = True
 
     def __init__(self, uid):
-        super().__init__(images={"sanduk:latest"})
+        super().__init__(images={IMAGE})
         self.uid = uid
 
     def run_argv(self, spec):
@@ -560,7 +593,7 @@ def test_shell_says_how_to_build_a_missing_image(engine, capsys):
 def test_shell_hands_the_terminal_a_tty_argv(engine, monkeypatch):
     """It cannot go through run_argv, which builds no -it, nor through launch,
     which reads stdout as a JSON stream."""
-    engine.images.add("sanduk:latest")
+    engine.images.add(IMAGE)
     seen = []
     monkeypatch.setattr("sanduk.cli.subprocess.call", lambda argv: seen.append(argv) or 0)
     assert main(["shell"]) == 0
@@ -998,7 +1031,8 @@ def test_the_holder_is_started_for_longer_than_the_run(tmp_path, monkeypatch):
 
 def test_an_oci_runtime_is_refused_where_there_is_none_to_swap(tmp_path, capsys):
     """Apple's engine runs each container as its own VM already."""
-    argv = ["run", "task", "-w", str(tmp_path), "--oci-runtime", "runsc"]
+    argv = ["run", "task", "-w", str(tmp_path), "--runtime", "apple"]
+    argv += ["--oci-runtime", "runsc"]
     assert main([*argv, "--dry-run"]) == 2
     assert "--runtime docker" in capsys.readouterr().err
 
@@ -1023,7 +1057,6 @@ def test_an_engine_that_cannot_start_an_agent_is_refused_before_the_network(
             made.append(name)
             return "10.0.0.1", "10.0.0.0/24"
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
     monkeypatch.setattr("sanduk.cli.get_runtime", lambda _: Engine())
     argv = ["run", "task", "-w", str(tmp_path), "--mode", "sealed", "--skip-key-check"]
     assert main(argv) == 2

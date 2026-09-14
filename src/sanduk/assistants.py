@@ -28,7 +28,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
+from sanduk.agent import DEFAULT_AGENT
 from sanduk.errors import AgentboxError
+from sanduk.providers import DEFAULT_PROVIDER
 from sanduk.runs import owner_alive
 from sanduk.util import note, read_unfollowed, seconds, state_dir
 
@@ -155,8 +157,8 @@ def load(directory: Path) -> Assistant:
     assistant = Assistant(
         name=str(conf.get("name", directory.name)),
         dir=directory,
-        agent=str(conf.get("agent", "claude")),
-        provider=str(conf.get("provider", "anthropic")),
+        agent=str(conf.get("agent", DEFAULT_AGENT)),
+        provider=str(conf.get("provider", DEFAULT_PROVIDER)),
         model=None if conf.get("model") is None else str(conf["model"]),
         runtime=None if conf.get("runtime") is None else str(conf["runtime"]),
         mode=read_mode(conf, path),

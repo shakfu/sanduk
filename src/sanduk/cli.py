@@ -59,13 +59,14 @@ from sanduk.proxy import ProxyServer, start_proxy
 from sanduk.runs import Run, claim, live_containers, sweep
 from sanduk.runtime import (
     CONTAINER_PREFIX,
-    DEFAULT_RUNTIME,
     RUNTIMES,
     Container,
     ContainerSpec,
     Mount,
     Runtime,
+    default_runtime,
     get_runtime,
+    runtime_order,
     wait_for_gateway,
 )
 from sanduk.util import copy_unfollowed, note, open_unfollowed, seconds
@@ -117,7 +118,7 @@ MAX_TIMEOUT = 7 * 86400
 RUN_EPILOG = (
     "The API key comes from the provider's environment variable only.\n"
     "\n"
-    "  export ANTHROPIC_API_KEY=sk-ant-...\n"
+    "  export OPENAI_API_KEY=sk-...\n"
     "  sanduk run 'Summarise every .py file here.' -w ./work\n"
     "  sanduk run --task-file brief.md -w ./repo --keep\n"
     "  sanduk run 'Review this.' --agent hax --provider openai-compat \\\n"
@@ -136,8 +137,9 @@ def engine_flags() -> argparse.ArgumentParser:
     p.add_argument(
         "--runtime",
         choices=sorted(RUNTIMES),
-        default=DEFAULT_RUNTIME,
-        help=f"container engine (default: {DEFAULT_RUNTIME})",
+        default=default_runtime(),
+        help="container engine (default: first installed of "
+        f"{', '.join(runtime_order())})",
     )
     p.add_argument(
         "-q", "--quiet", action="store_true", help="suppress the per-event trace"
@@ -670,9 +672,11 @@ def show(args: argparse.Namespace) -> int:
             key = provider.key_env if provider.has_auth else "(no key needed)"
             print(f"{name:14}  {url:34}  {key}")
     else:
+        picked = default_runtime()
         for name, engine in sorted(RUNTIMES.items()):
             found = "installed" if shutil.which(engine.cli) else "not installed"
-            print(f"{name:8}  {engine.cli:12}  {found}")
+            mark = "default" if name == picked else ""
+            print(f"{name:8}  {engine.cli:12}  {found:13}  {mark}".rstrip())
     return 0
 
 
@@ -725,6 +729,8 @@ def select(args: argparse.Namespace) -> Selection:
                 "--budget is counted by the relay, which --mode open does not "
                 "start. Use --mode key-safe or sealed"
             )
+    if not getattr(args, "model", None):
+        args.model = provider.default_model
     agent.check(args, provider)
     return Selection(
         agent=agent, provider=provider, image=image, containerfile=containerfile

@@ -131,7 +131,8 @@ def work(tmp_path, monkeypatch):
 def run_with(monkeypatch, work, argv, *flags):
     engine = Engine(argv)
     monkeypatch.setattr("sanduk.cli.get_runtime", lambda _: engine)
-    base = ["run", "task", "-w", str(work), "--mode", "open", "--skip-key-check"]
+    base = ["run", "task", "-w", str(work), "--mode", "open", "--skip-key-check",
+            "--agent", "claude", "--provider", "anthropic"]  # fmt: skip
     return main([*base, *flags]), engine
 
 

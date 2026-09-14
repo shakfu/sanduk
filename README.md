@@ -55,8 +55,8 @@ The wheel carries a `Containerfile` per agent, so `sanduk build` works from a pl
 
 ```text
 pip install sanduk
-export ANTHROPIC_API_KEY=sk-ant-...
-sanduk build                                        # the claude image
+export OPENAI_API_KEY=sk-...
+sanduk build                                        # the codex image
 sanduk run 'Summarise every Python file here.' -w ./work --mode sealed
 sanduk --help
 ```
@@ -67,7 +67,7 @@ From a checkout, where the Makefile wraps the same commands:
 git clone https://github.com/shakfu/sanduk.git && cd sanduk
 make sync
 make image
-export ANTHROPIC_API_KEY=sk-ant-...
+export OPENAI_API_KEY=sk-...
 make run TASK='Summarise every Python file here.' WORK=./work
 ```
 
@@ -108,7 +108,7 @@ sanduk destroy             clean, plus the image and every mode's network
 sanduk system status       whether the engine is ready
 sanduk list agents         what each registered handler speaks
 sanduk list providers      the URL an agent must be given, per provider
-sanduk list runtimes       engines, and whether each is installed
+sanduk list runtimes       engines, whether each is installed, and the default
 
 sanduk assistant add <dir> register a scheduled assistant
 sanduk tell <name> <text>  queue a message for its next wakeup
@@ -120,16 +120,18 @@ sanduk runs                wakeup history
 
 The first group is one container and no memory of it. The second is [Assistants](#assistants): the same run, on a schedule, with state that outlives it.
 
-Every container-engine call sanduk makes goes through `Runtime`, so the Makefile names no engine and `--runtime` selects one for any of these.
+Every container-engine call sanduk makes goes through `Runtime`, so the Makefile names no engine and `--runtime` selects one for any of these. Without `--runtime`, sanduk takes the first engine on PATH: `apple` then `docker` on macOS, `docker` elsewhere. An explicit `--runtime` is used as given.
 
 ## Providers
 
 ```text
 --provider anthropic       api.anthropic.com          ANTHROPIC_API_KEY
---provider openai          api.openai.com             OPENAI_API_KEY
+--provider openai          api.openai.com             OPENAI_API_KEY      (default)
 --provider openrouter      openrouter.ai/api/v1       OPENROUTER_API_KEY
 --provider openai-compat   --upstream, no key needed  OPENAI_API_KEY if set
 ```
+
+With `--provider openai` and no `--model`, the run selects `gpt-5.6-luna`. Other providers leave the model to the agent.
 
 A provider record names the upstream, the auth header, the variable its key comes from, the path the preflight checks, and a route table. The route table maps each allowed path to the wire protocol spoken there, so one structure is the egress allowlist, the field `--max-tokens-cap` clamps, and the names the usage line reads.
 
@@ -153,7 +155,7 @@ The relay only forwards. It does not translate between protocols, so the agent h
 
 ```text
 --agent claude     Claude Code   anthropic
---agent codex      codex         openai, openai-compat
+--agent codex      codex         openai, openai-compat  (default)
 --agent hax        hax           every provider
 --agent hermes     hermes-agent  openai-chat providers, --mode open only
 --agent opencode   opencode      every provider
@@ -198,7 +200,7 @@ pi speaks all three protocols the relay carries, and its provider block names wh
 
 5. The relay checks the token in the header that provider authenticates with, checks the path against an exact allowlist, applies any model or token policy, swaps in the real key, and streams the response back. Every credential header the container sent is dropped, not only the one this provider uses: a header that means nothing to one API is the key for another.
 
-6. Every relayed call logs its token counts: `in=`, `cache_write=`, `cache_read=`, `out=`. A counter the protocol does not report is left out rather than printed as zero, and a completion that reports none at all logs `usage=?` rather than a line that looks ordinary. The relay narrows the client's `Accept-Encoding` to `gzip` to read them, because the API answers in brotli whenever a client offers it and nothing in the standard library decodes brotli. For OpenAI-shaped providers it also adds `stream_options.include_usage`, without which a streamed response carries no counts at all.
+6. Every relayed call logs its token counts: `in=`, `cache_write=`, `cache_read=`, `out=`. A counter the protocol does not report is left out rather than printed as zero, and a completion that reports none at all logs `usage=?` rather than a line that looks ordinary. The relay narrows the client's `Accept-Encoding` to `gzip` to read them, because the API answers in brotli whenever a client offers it and nothing in the standard library decodes brotli. For OpenAI-shaped providers it also adds `stream_options.include_usage` to streamed Chat Completions requests, without which the response carries no counts at all. Responses streams report usage unasked and reject the field.
 
 ## Flags worth knowing
 
@@ -352,7 +354,7 @@ The integration suite boots real VMs and proves the relay by the 401 an invalid 
 
 `make test-live` talks to real providers, and most of it costs nothing. The bad-key tests reach Anthropic, OpenAI, and OpenRouter with no credential at all, since refusing an invalid key needs no valid one. Point `LLAMA_SERVER` at a local `llama-server` and the whole openai-compat path runs for free.
 
-Of the two completion tests, OpenRouter needs only a key: it defaults to `openrouter/free`, a router that picks a free model at random. A pinned `:free` id works too, but those rotate out of the catalogue, which fails the test for a reason unrelated to sanduk. OpenAI has no free tier, so it stays opt-in through `OPENAI_MODEL` and nothing is spent unless a model is named.
+Of the two completion tests, OpenRouter needs only a key: it defaults to `openrouter/free`, a router that picks a free model at random. A pinned `:free` id works too, but those rotate out of the catalogue, which fails the test for a reason unrelated to sanduk. OpenAI has no free tier, so it stays opt-in through `OPENAI_MODEL` and nothing is spent unless a model is named. The same variable runs a streamed `/v1/responses` call, which checks that the relay adds no `stream_options` there and reads usage from the final event. `LLAMA_SERVER` runs that check against llama-server as well.
 
 ```text
 LLAMA_SERVER=http://127.0.0.1:8080 make test-live

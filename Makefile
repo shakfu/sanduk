@@ -6,8 +6,8 @@
 #   make run TASK='Find the slowest test' WORK=../myrepo ARGS='--effort max'
 
 PKG     ?= sanduk
-AGENT   ?= claude
-RUNTIME ?= apple
+AGENT   ?= codex
+RUNTIME ?=
 IMAGE   ?=
 NETWORK ?= sanduk-net
 WORK    ?= ./work
@@ -20,6 +20,8 @@ RUN     ?= $(UV) run
 # only when set, so the suite falls back to the handler's own image rather than
 # a name this file would have to keep in step with the registry.
 export AGENT RUNTIME NETWORK
+# Empty RUNTIME lets sanduk pick the first engine installed for this platform.
+RUNTIME_FLAG = $(if $(RUNTIME),--runtime $(RUNTIME))
 ifneq ($(IMAGE),)
 export IMAGE
 endif
@@ -36,7 +38,7 @@ help:  ## Show this help
 	@grep -hE '^[a-z][a-z-]*:.*?## ' $(MAKEFILE_LIST) \
 	  | awk -F':.*## ' '{printf "  %-16s %s\n", $$1, $$2}'
 	@echo
-	@echo "Variables: AGENT=$(AGENT) RUNTIME=$(RUNTIME) NETWORK=$(NETWORK) WORK=$(WORK)"
+	@echo "Variables: AGENT=$(AGENT) RUNTIME=$(or $(RUNTIME),auto) NETWORK=$(NETWORK) WORK=$(WORK)"
 
 # --- python environment -----------------------------------------------------
 
@@ -122,26 +124,26 @@ docs:  ## Build documentation (sphinx is fetched on demand)
 # --- image ------------------------------------------------------------------
 
 image:  ## Build the agent image if it is missing
-	@$(RUN) sanduk build --agent $(AGENT) --runtime $(RUNTIME)
+	@$(RUN) sanduk build --agent $(AGENT) $(RUNTIME_FLAG)
 
 image-rebuild:  ## Rebuild the agent image unconditionally
-	@$(RUN) sanduk build --agent $(AGENT) --force --runtime $(RUNTIME)
+	@$(RUN) sanduk build --agent $(AGENT) --force $(RUNTIME_FLAG)
 
 # --- running ----------------------------------------------------------------
 
 run:  ## Run the agent. TASK='...' WORK=./dir AGENT=hax ARGS='--effort max'
-	@$(RUN) sanduk run "$(TASK)" -w $(WORK) --agent $(AGENT) $(ARGS) --runtime $(RUNTIME)
+	@$(RUN) sanduk run "$(TASK)" -w $(WORK) --agent $(AGENT) $(ARGS) $(RUNTIME_FLAG)
 
 run-proxy:  ## Run sealed: no egress, and the key held on the host
-	@$(RUN) sanduk run "$(TASK)" -w $(WORK) --agent $(AGENT) --mode sealed $(ARGS) --runtime $(RUNTIME)
+	@$(RUN) sanduk run "$(TASK)" -w $(WORK) --agent $(AGENT) --mode sealed $(ARGS) $(RUNTIME_FLAG)
 
 shell:  ## Interactive shell in the agent image (no network, nothing mounted)
-	@$(RUN) sanduk shell --agent $(AGENT) --runtime $(RUNTIME)
+	@$(RUN) sanduk shell --agent $(AGENT) $(RUNTIME_FLAG)
 
 # --- inspection -------------------------------------------------------------
 
 ps:  ## List sanduk containers
-	@$(RUN) sanduk ps --runtime $(RUNTIME)
+	@$(RUN) sanduk ps $(RUNTIME_FLAG)
 
 logs:  ## Show recorded request bodies from --log-bodies runs
 	@ls -R sanduk-logs 2>/dev/null || echo "no logs (run with --log-bodies)"
@@ -149,10 +151,10 @@ logs:  ## Show recorded request bodies from --log-bodies runs
 # --- teardown ---------------------------------------------------------------
 
 stop:  ## Stop running sanduk containers, leaving them on disk
-	@$(RUN) sanduk stop --runtime $(RUNTIME)
+	@$(RUN) sanduk stop $(RUNTIME_FLAG)
 
 clean:  ## Delete sanduk containers and build scratch. Keeps work/ and logs
-	@$(RUN) sanduk clean --runtime $(RUNTIME)
+	@$(RUN) sanduk clean $(RUNTIME_FLAG)
 	@rm -rf build/ dist/ htmlcov/ .coverage .pytest_cache/
 	@rm -rf src/*.egg-info/ *.egg-info/
 	@find . -name "__pycache__" -type d -prune -exec rm -rf {} +
@@ -162,7 +164,7 @@ distclean: clean  ## clean, plus the resolved environment and tool caches
 	@rm -rf .venv/ .mypy_cache/ .ruff_cache/
 
 destroy:  ## clean, plus the image, the network, and recorded request bodies
-	@$(RUN) sanduk destroy --agent $(AGENT) --proxy-network $(NETWORK) --runtime $(RUNTIME)
+	@$(RUN) sanduk destroy --agent $(AGENT) --proxy-network $(NETWORK) $(RUNTIME_FLAG)
 	@rm -rf build/ dist/ htmlcov/ .coverage .pytest_cache/
 	@if [ -d sanduk-logs ]; then \
 	  n=$$(find sanduk-logs -name '*.json' | wc -l | tr -d ' '); \
@@ -172,10 +174,10 @@ destroy:  ## clean, plus the image, the network, and recorded request bodies
 # --- container service ------------------------------------------------------
 
 system-status:  ## Show whether the container engine is ready
-	@$(RUN) sanduk system status --runtime $(RUNTIME)
+	@$(RUN) sanduk system status $(RUNTIME_FLAG)
 
 system-start:  ## Start the engine's service, where it has one
-	@$(RUN) sanduk system start --runtime $(RUNTIME)
+	@$(RUN) sanduk system start $(RUNTIME_FLAG)
 
 system-stop:  ## Stop it. NOTE: system-wide, not just sanduk
-	@$(RUN) sanduk system stop --runtime $(RUNTIME)
+	@$(RUN) sanduk system stop $(RUNTIME_FLAG)

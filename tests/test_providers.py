@@ -17,8 +17,18 @@ from sanduk.providers import (
 )
 
 
-def test_anthropic_is_the_default_provider():
-    assert get_provider().name == "anthropic"
+def test_openai_is_the_default_provider():
+    assert get_provider().name == "openai"
+
+
+def test_only_openai_names_a_default_model():
+    defaults = {p.name: p.default_model for p in PROVIDERS.values()}
+    assert defaults == {
+        "anthropic": None,
+        "openai": "gpt-5.6-luna",
+        "openrouter": None,
+        "openai-compat": None,
+    }
 
 
 def test_unknown_provider_names_the_known_ones():

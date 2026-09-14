@@ -19,8 +19,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import socket
+import sys
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -418,9 +420,7 @@ class Docker(Runtime):
     def require_service(self) -> None:
         r = run([self.cli, "info", "--format", "{{.ServerVersion}}"], capture_output=True)
         if r.returncode != 0:
-            raise AgentboxError(
-                "the docker daemon is not reachable. Start it, then re-run."
-            )
+            raise AgentboxError(docker_daemon_error(r.stderr or ""))
 
     def require_run(self) -> None:
         # The snap reports its base as the daemon's OS, whatever the host runs:
@@ -492,11 +492,58 @@ class Docker(Runtime):
         return out
 
 
+def docker_daemon_error(
+    stderr: str, platform: str = sys.platform, systemd: bool | None = None
+) -> str:
+    """Why `docker info` failed, with the command that fixes it on this host."""
+    found = re.search(r"\b(?:unix|tcp|ssh|npipe)://[^\s;]+", stderr)
+    endpoint = found.group(0).rstrip(":,.") if found else ""
+    where = f"the docker daemon at {endpoint}" if endpoint else "the docker daemon"
+    if "permission denied" in stderr.lower():
+        return (
+            f"permission denied on {where}. Add yourself to the docker group "
+            "(sudo usermod -aG docker $USER) and log in again. Membership is "
+            "root-equivalent on this host."
+        )
+    if endpoint and not endpoint.startswith("unix://"):
+        # Starting a local daemon would not help; the CLI points elsewhere.
+        return (
+            f"{where} is not reachable. Check that host, or point DOCKER_HOST or "
+            "`docker context use` at a local daemon."
+        )
+    if platform == "darwin":
+        fix = "open -a Docker, or colima start"
+    elif "/run/user/" in endpoint:
+        fix = "systemctl --user start docker"
+    elif systemd if systemd is not None else shutil.which("systemctl"):
+        fix = "sudo systemctl start docker"
+    else:
+        fix = "sudo service docker start"
+    return f"{where} is not reachable. Start it with `{fix}`, then re-run."
+
+
 RUNTIMES: dict[str, type[Runtime]] = {"apple": AppleContainer, "docker": Docker}
-DEFAULT_RUNTIME = "apple"
+# Engines tried in order when --runtime is not given. Apple's engine exists only
+# on macOS; elsewhere a `container` on PATH is some other program.
+RUNTIME_ORDER: dict[str, tuple[str, ...]] = {"darwin": ("apple", "docker")}
+FALLBACK_ORDER = ("docker",)
 
 
-def get_runtime(name: str = DEFAULT_RUNTIME) -> Runtime:
+def runtime_order(platform: str = sys.platform) -> tuple[str, ...]:
+    return RUNTIME_ORDER.get(platform, FALLBACK_ORDER)
+
+
+def default_runtime(platform: str = sys.platform) -> str:
+    """The first engine in this platform's order whose CLI is on PATH.
+
+    Falls back to the first in the order, so the not-found error names it.
+    """
+    order = runtime_order(platform)
+    return next((n for n in order if shutil.which(RUNTIMES[n].cli)), order[0])
+
+
+def get_runtime(name: str | None = None) -> Runtime:
+    name = name or default_runtime()
     try:
         return RUNTIMES[name]()
     except KeyError:

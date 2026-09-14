@@ -6,6 +6,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A streamed `/v1/responses` call through the relay no longer fails with `400 Unknown parameter: 'stream_options.include_usage'`. The relay added the field on every protocol route of a provider that needs it, but it belongs to Chat Completions. Every `--agent codex --provider openai` run in a relayed mode failed on its first call. A streamed Responses reply also logged `usage=?`: its counts are in `response.completed` under `response.usage`, which the usage reader did not look in. `make test-live` now runs a streamed Responses call through the relay, against OpenAI with `OPENAI_MODEL` set and against llama-server with `LLAMA_SERVER`.
+
+- The Docker "daemon is not reachable" error names the fix. It read `docker info`'s exit status alone, so a permission-denied socket, a remote `DOCKER_HOST` and a stopped local daemon all said "Start it". It now names the endpoint and one of: `sudo systemctl start docker`, `systemctl --user start docker` for a rootless socket, `sudo service docker start`, Docker Desktop or Colima on macOS, joining the `docker` group, or checking the remote host.
+
+### Changed
+
+- The defaults are now `--provider openai`, `--agent codex` and, for `openai` only, `--model gpt-5.6-luna`. `claude` speaks Anthropic Messages only, so it could not stay the default agent against `openai`; codex speaks Responses, OpenAI's native protocol. The model default is per provider because a GPT id sent to Anthropic or OpenRouter fails upstream. `assistant.toml` and `make` follow the same defaults. Claude Code users now pass `--agent claude --provider anthropic`.
+
+- `--runtime` defaults to the first engine on PATH for the platform: `apple` then `docker` on macOS, `docker` elsewhere. The fixed `apple` default failed every Linux run that omitted the flag. Only macOS tries `apple`, because a `container` binary elsewhere is a different program. Detection checks PATH, not whether the engine's service is up. A stopped `container` service reports its own error instead of moving runs to Docker's image and container store. `make` passes `--runtime` only when `RUNTIME` is set. `sanduk list runtimes` marks the engine a run would pick.
+
+### Fixed
+
 - Under `--runtime docker` on Linux, the agent can write a workdir owned by a user other than uid 1000. Every image ran its agent as uid 1000, and a native daemon keeps host ownership on a bind mount, so the agent could not write `REPORT.md` into a uid-1001 directory. GitHub's runner is one such case; the mount test has failed in CI since 0.2.4. `sanduk build --runtime docker` now builds the agent user with the caller's uid and gid. `--user` at run time was the alternative, but it leaves `$HOME` owned by 1000, where the images keep their config. A root caller keeps uid 1000. See [docs/dev/podman.md](docs/dev/podman.md).
 
   `run` now refuses such a mismatch before any container starts, and names the `sanduk build --force` that fixes it. The image records its agent's uid in the `sanduk.agent-uid` label. An unlabelled image of a shipped agent predates the fix and counts as uid 1000; that is every existing Docker image, which otherwise failed only after the run had spent its tokens. The check skips a group- or world-writable workdir, and any unlabelled image built with `--image` or `--containerfile`: the agent may still get in, and a false refusal has no workaround.

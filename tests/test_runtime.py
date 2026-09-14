@@ -4,6 +4,7 @@ No containers and no network: everything here is a pure function or is
 monkeypatched.
 """
 
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -19,7 +20,8 @@ KEY = "sk-ant-api03-SECRET"
 
 
 def argv_for(*flags, workdir, network=None):
-    args = parse_args(["run", *flags])
+    # The assertions here are Claude Code's argv.
+    args = parse_args(["run", *flags, "--agent", "claude", "--provider", "anthropic"])
     sel = select(args)
     wiring = sel.agent.wire(args, sel.provider, relay_root(args))
     return get_runtime().run_argv(
@@ -30,8 +32,30 @@ def argv_for(*flags, workdir, network=None):
 # --- registry ---------------------------------------------------------------
 
 
-def test_default_runtime_is_apple_container():
-    assert get_runtime().cli == "container"
+@pytest.mark.parametrize(
+    ("platform", "on_path", "expected"),
+    [
+        ("darwin", {"container", "docker"}, "apple"),
+        ("darwin", {"docker"}, "docker"),
+        ("darwin", set(), "apple"),
+        # A `container` on Linux is not Apple's engine.
+        ("linux", {"container", "docker"}, "docker"),
+        ("linux", set(), "docker"),
+        ("win32", {"docker"}, "docker"),
+    ],
+)
+def test_the_default_runtime_is_the_first_installed_for_the_platform(
+    monkeypatch, platform, on_path, expected
+):
+    monkeypatch.setattr(
+        runtime.shutil, "which", lambda cli: f"/bin/{cli}" if cli in on_path else None
+    )
+    assert runtime.default_runtime(platform) == expected
+
+
+def test_an_explicit_runtime_is_not_cascaded(monkeypatch):
+    monkeypatch.setattr(runtime.shutil, "which", lambda cli: None)
+    assert get_runtime("apple").cli == "container"
 
 
 def test_unknown_runtime_names_the_known_ones():
@@ -111,7 +135,7 @@ def test_image_exists_reads_the_listing(monkeypatch):
     monkeypatch.setattr(
         runtime, "run", lambda *a, **k: SimpleNamespace(returncode=0, stdout=listing)
     )
-    engine = get_runtime()
+    engine = get_runtime("apple")
     assert engine.image_exists("sanduk:latest")
     assert engine.image_exists("sanduk") is True  # tag defaults to latest
     assert not engine.image_exists("sanduk:test")
@@ -241,6 +265,56 @@ def test_an_unreachable_docker_daemon_is_named(monkeypatch):
     monkeypatch.setattr(runtime.shutil, "which", lambda _: "/usr/bin/docker")
     with pytest.raises(AgentboxError, match="daemon"):
         get_runtime("docker").require()
+
+
+# stderr as docker 29.8.0 prints it, captured on Linux.
+NO_SOCKET = (
+    "failed to connect to the docker API at unix:///var/run/docker.sock; check if "
+    "the path is correct and if the daemon is running: dial unix "
+    "/var/run/docker.sock: connect: no such file or directory"
+)
+
+
+@pytest.mark.parametrize(
+    ("stderr", "platform", "systemd", "expected"),
+    [
+        (NO_SOCKET, "linux", True, "`sudo systemctl start docker`"),
+        (NO_SOCKET, "linux", False, "`sudo service docker start`"),
+        (
+            NO_SOCKET.replace("/var/run/docker.sock", "/run/user/1000/docker.sock"),
+            "linux",
+            True,
+            "`systemctl --user start docker`",
+        ),
+        (NO_SOCKET, "darwin", False, "`open -a Docker, or colima start`"),
+        (
+            "permission denied while trying to connect to the docker API at "
+            "unix:///var/run/docker.sock",
+            "linux",
+            True,
+            "sudo usermod -aG docker $USER",
+        ),
+        (
+            "Cannot connect to the Docker daemon at tcp://10.0.0.5:2376. Is the "
+            "docker daemon running?",
+            "linux",
+            True,
+            "DOCKER_HOST",
+        ),
+    ],
+    ids=["systemd", "sysvinit", "rootless", "macos", "permission", "remote"],
+)
+def test_the_docker_daemon_error_names_the_fix(stderr, platform, systemd, expected):
+    message = runtime.docker_daemon_error(stderr, platform, systemd)
+    assert expected in message
+    endpoint = re.search(r"(?:unix|tcp)://[^\s;]+", stderr).group(0).rstrip(":.")
+    assert endpoint in message
+
+
+def test_a_daemon_error_with_no_endpoint_still_names_a_fix():
+    message = runtime.docker_daemon_error("", "linux", True)
+    assert message.startswith("the docker daemon is not reachable")
+    assert "`sudo systemctl start docker`" in message
 
 
 def test_a_snap_docker_daemon_cannot_run_an_agent(monkeypatch):

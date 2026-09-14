@@ -12,6 +12,7 @@ llama-server and the whole relay path is exercised for free:
 
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 
@@ -265,6 +266,84 @@ def test_the_real_key_reaches_the_api_and_the_token_does_not(provider, path):
         assert status in (401, 403), status
     finally:
         srv.shutdown()
+
+
+def _relay_line(capsys, needle, timeout=5.0):
+    """The relay's log line for a call. It is printed after the client has read
+    the last byte, so it can trail the response."""
+    seen = ""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        seen += capsys.readouterr().err
+        line = next((ln for ln in seen.splitlines() if needle in ln), None)
+        if line:
+            return line
+        time.sleep(0.05)
+    pytest.fail(f"relay logged no {needle!r}: {seen[-400:]!r}")
+
+
+def _assert_streamed_responses_usage(port, model, capsys):
+    """A streamed Responses call through the relay must not be given
+    stream_options (OpenAI answers 400 unknown_parameter), and its counts, nested
+    under the final event's `response`, must reach the relay's log line."""
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/v1/responses",
+        data=json.dumps(
+            {
+                "model": model,
+                "input": "Reply with: ok",
+                "stream": True,
+                "max_output_tokens": 64,
+            }
+        ).encode(),
+        headers={
+            "authorization": f"Bearer {TOKEN}",
+            "content-type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=120) as r:
+            body = r.read().decode()
+    except urllib.error.HTTPError as e:
+        pytest.fail(f"{e.code}: {e.read()[:400]!r}")
+    logged = _relay_line(capsys, "POST /v1/responses")
+    events = []
+    for line in body.splitlines():
+        if line.startswith("data: "):
+            events.append(json.loads(line[6:]))
+    # A reasoning model can spend the output budget and end incomplete; both
+    # final events carry usage.
+    final = [
+        e["response"]["usage"]
+        for e in events
+        if e.get("type") in ("response.completed", "response.incomplete")
+    ]
+    assert final, f"no final event in the stream: {body[-400:]}"
+    assert final[-1]["input_tokens"] > 0
+    assert "-> 200" in logged and "usage=?" not in logged, logged
+    assert f" in={final[-1]['input_tokens']} " in logged, logged
+
+
+def test_a_real_streamed_responses_call_reports_usage(capsys):
+    key = os.environ.get(OPENAI_PROVIDER.key_env, "")
+    model = os.environ.get("OPENAI_MODEL", "")
+    if not key:
+        pytest.skip(f"set {OPENAI_PROVIDER.key_env}")
+    if not model:
+        pytest.skip("set OPENAI_MODEL; this provider has no free default")
+    srv, port = _live_relay(OPENAI_PROVIDER, key)
+    try:
+        _assert_streamed_responses_usage(port, model, capsys)
+    finally:
+        srv.shutdown()
+
+
+@needs_llama
+def test_a_streamed_responses_call_reports_usage(relay, capsys):
+    """openai-compat declares /v1/responses for Responses-only agents such as
+    codex. Only the usage half is tested here: llama-server b10970 accepts
+    stream_options on /v1/responses, so the 400 needs the OpenAI variant."""
+    _assert_streamed_responses_usage(relay, "local-model", capsys)
 
 
 @needs_llama

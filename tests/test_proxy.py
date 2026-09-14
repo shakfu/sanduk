@@ -787,6 +787,14 @@ def test_existing_stream_options_are_preserved(compat_relay):
     }
 
 
+def test_a_streamed_responses_request_is_not_given_stream_options(compat_relay):
+    """OpenAI answers 400 unknown_parameter: the field is Chat Completions only."""
+    port, seen, _ = compat_relay()
+    body = json.dumps({"model": "m", "input": "hi", "stream": True}).encode()
+    bearer_call(port, "/v1/responses", body=body)
+    assert "stream_options" not in seen["body"]
+
+
 def test_a_non_streamed_request_is_untouched(compat_relay):
     """Non-streamed responses carry usage already; the field would be noise."""
     port, seen, _ = compat_relay()
@@ -875,6 +883,22 @@ def test_responses_usage_is_read_with_its_own_nesting():
             }
         ).encode()
     )
+    sniffer.close()
+    assert sniffer.digest() == " in=40 cache_read=32 out=9"
+
+
+def test_responses_sse_usage_is_read_from_the_completed_event():
+    """Earlier events carry the response object with "usage": null."""
+    sniffer = proxy.UsageSniffer(
+        "text/event-stream", "", providers.OPENAI_RESPONSES_PROTOCOL
+    )
+    for chunk in (
+        b'data: {"type":"response.created","response":{"usage":null}}\n\n',
+        b'data: {"type":"response.output_text.delta","delta":"ok"}\n\n',
+        b'data: {"type":"response.completed","response":{"usage":{"input_tokens":40,'
+        b'"output_tokens":9,"input_tokens_details":{"cached_tokens":32}}}}\n\n',
+    ):
+        sniffer.feed(chunk)
     sniffer.close()
     assert sniffer.digest() == " in=40 cache_read=32 out=9"
 

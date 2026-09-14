@@ -2,7 +2,18 @@
 
 Ordered by how much they would change a decision, not by effort.
 
+## Priority
+
+- [ ] change default cloud provider to openai and model to openai-5.6-luna
+
+- [ ] explore using [rtk](https://github.com/rtk-ai/rtk) to reduce token usage. 
+
+
 ## Untested
+
+- Add support for other solutions:
+    - docker sbx
+    - nvidia openshell
 
 - **Kata Containers under `--oci-runtime`.** A VM per container on Linux, where Docker otherwise shares the host kernel. Measure `sealed` mode (the relay on the host gateway), `/work` under Cloud Hypervisor or QEMU, and Firecracker's lack of filesystem sharing. Needs KVM; standard GitHub runners may not expose it. See [docs/dev/microvms.md](docs/dev/microvms.md).
 

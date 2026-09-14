@@ -56,7 +56,7 @@ The wheel carries a `Containerfile` per agent, so `sanduk build` works from a pl
 ```text
 pip install sanduk
 export ANTHROPIC_API_KEY=sk-ant-...
-sanduk build                                              # the claude image
+sanduk build                                        # the claude image
 sanduk run 'Summarise every Python file here.' -w ./work --mode sealed
 sanduk --help
 ```

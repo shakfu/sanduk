@@ -14,7 +14,13 @@ Ordered by how much they would change a decision, not by effort.
 
 - [ ] change default cloud provider to openai and model to openai-5.6-luna
 
-- [ ] explore using [rtk](https://github.com/rtk-ai/rtk) to reduce token usage. 
+- [ ] **Trial shell-output compressors with claude: none, rtk, snip.** Run one task through `--agent claude --provider anthropic --mode sealed` in three images: stock, with [rtk](https://github.com/rtk-ai/rtk), and with [snip](https://github.com/edouard-claude/snip). Both install a Claude Code PreToolUse hook. Build the two variants with `--containerfile`, pinning a release binary by checksum and running the global `init`. Pick a test- and git-heavy task; neither tool shrinks file reads, so a review task shows little. Run each arm 3 times with a fixed `--model`, `--stats-file` and `--log-bodies`.
+
+  Compare cost per arm. The relay prices nothing for Anthropic, and `--budget` is refused there. Two figures, which should agree:
+  - Claude Code's `total_cost_usd`, the `$` in the stats line. Its own estimate.
+  - The relay log's per-call `in=`, `cache_write=`, `cache_read=` and `out=`, summed and priced at Anthropic's list rates. The stats line alone is not enough: it folds cache writes, billed above base input, into `in`.
+
+  Also compare turns, wall time, and whether `REPORT.md` still finds what the stock arm found. Filters hide diff context and passing tests. Run with the default permission mode; a hook that allows its rewrite may bypass `--allowed-tools` (untested). See [docs/dev/compressors.md](docs/dev/compressors.md).
 
 ### Correctness
 

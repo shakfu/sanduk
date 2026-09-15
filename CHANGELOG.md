@@ -4,6 +4,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Design sketch for kits and recipes, not implemented. A recipe is a JSON description of an agent image that sanduk renders to one Containerfile. It replaces the seven hand-written Containerfiles and their duplicated uid block. A kit is a JSON bundle of pinned tools and one skill text shared by every agent, such as d2 and officecli. A recipe includes a kit by name and the SHA-256 of its `kit.json`, so a kit changed by a catalogue update stops the build rather than changing the image unseen. Parents are inherited by name, unpinned, and a child can remove inherited kits, sections, env keys or section types. The inheritance model comes from [start-vm](https://github.com/shakfu/start-vm), with parent sections ordered first, since a child step may need a parent's packages. See [docs/dev/kits.md](docs/dev/kits.md).
+
 ### Fixed
 
 - A streamed `/v1/responses` call through the relay no longer fails with `400 Unknown parameter: 'stream_options.include_usage'`. The relay added the field on every protocol route of a provider that needs it, but it belongs to Chat Completions. Every `--agent codex --provider openai` run in a relayed mode failed on its first call. A streamed Responses reply also logged `usage=?`: its counts are in `response.completed` under `response.usage`, which the usage reader did not look in. `make test-live` now runs a streamed Responses call through the relay, against OpenAI with `OPENAI_MODEL` set and against llama-server with `LLAMA_SERVER`.

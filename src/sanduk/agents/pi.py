@@ -17,7 +17,6 @@ import json
 from typing import Any
 
 from sanduk.agent import (
-    RESOURCES,
     Agent,
     Outcome,
     Reader,
@@ -143,8 +142,8 @@ def text_of(message: dict[str, Any]) -> str:
 
 class Pi(Agent):
     name = "pi"
-    image = "sanduk-pi:latest"
-    containerfile = RESOURCES / "Containerfile.pi"
+    recipe = "pi"
+    skills_dir: str | None = ".agents/skills"
     protocols = frozenset({ANTHROPIC_MESSAGES, OPENAI_CHAT, OPENAI_RESPONSES})
     # Attributes rather than constants: prime-agent is this CLI in another
     # build, and the variable names are all that differ.

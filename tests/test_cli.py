@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from sanduk import assistants
-from sanduk.agent import REPORT_NAME, Outcome, get_agent
+from sanduk.agent import REPORT_NAME, Outcome
 from sanduk.cli import (
     MAX_TIMEOUT,
     _collect_report,
@@ -21,17 +21,25 @@ from sanduk.cli import (
     main,
     parse_args,
     parse_mounts,
+    resolve_image,
     select,
 )
 from sanduk.errors import AgentboxError
 from sanduk.providers import get_provider
 from sanduk.runs import runs_dir
-from sanduk.runtime import Container
+from sanduk.runtime import Container, get_runtime
 
 KEY = "sk-api03-SECRET"
 # The default run reads the default provider's key.
 KEY_ENV = get_provider().key_env
-IMAGE = get_agent().image
+
+
+def recipe_image(*flags):
+    """The tag `build` and `run` use, from the agent's recipe."""
+    return resolve_image(parse_args(["build", *flags]))[1].tag
+
+
+IMAGE = recipe_image()
 
 
 @pytest.fixture(autouse=True)
@@ -327,7 +335,8 @@ def test_select_fills_the_model_from_the_provider(argv, model):
 def test_list_agents_shows_what_each_one_speaks(capsys):
     assert main(["list", "agents"]) == 0
     out = capsys.readouterr().out
-    assert "claude" in out and "sanduk-hax:latest" in out
+    rows = {line.split()[0]: line.split()[1] for line in out.splitlines()}
+    assert rows["hax"] == "hax" and rows["claude"] == "claude"
     assert "openai-chat" in out
 
 
@@ -403,8 +412,16 @@ class StubEngine:
     def image_exists(self, image):
         return image in self.images
 
+    def build_args(self):
+        # The real engine's, so a tag computed without the stub matches.
+        return get_runtime().build_args()
+
     def build_image(self, image, containerfile):
-        self.built.append((image, containerfile))
+        # Read now: a rendered recipe's context is deleted after the build.
+        self.built.append((image, containerfile.read_text()))
+
+    def image_tags(self, repository):
+        return sorted(i for i in self.images if i.startswith(repository + ":"))
 
     def list_containers(self, prefix=""):
         return [c for c in self.containers if c.name.startswith(prefix)]
@@ -445,11 +462,12 @@ def running(*names):
     return [Container(name=n, image="sanduk:latest", state="running") for n in names]
 
 
-def test_build_uses_the_agents_image_and_containerfile(engine):
+def test_build_renders_the_agents_recipe(engine):
     assert main(["build", "--agent", "hax"]) == 0
     image, containerfile = engine.built[0]
-    assert image == "sanduk-hax:latest"
-    assert containerfile.name == "Containerfile.hax"
+    assert image.startswith("sanduk-hax:")
+    assert "FROM docker.io/library/debian:trixie-slim" in containerfile
+    assert containerfile.rstrip().endswith('ENTRYPOINT ["hax"]')
 
 
 def test_build_is_a_no_op_when_the_image_exists(engine, capsys):
@@ -462,7 +480,7 @@ def test_build_is_a_no_op_when_the_image_exists(engine, capsys):
 def test_force_rebuilds_an_existing_image(engine):
     engine.images.add(IMAGE)
     main(["build", "--force"])
-    assert engine.built == [(IMAGE, get_agent().containerfile)]
+    assert [image for image, _ in engine.built] == [IMAGE]
 
 
 class OwnerEngine(StubEngine):
@@ -602,9 +620,12 @@ def test_shell_hands_the_terminal_a_tty_argv(engine, monkeypatch):
 
 def test_destroy_removes_the_containers_image_and_network(engine):
     engine.containers = running("sanduk-a1b2")
+    engine.images = {"sanduk-hax:0123456789ab", "sanduk-hax:ba9876543210"}
+    engine.images.add("sanduk-hax-docs:0123456789ab")
     assert main(["destroy", "--agent", "hax", "--proxy-network", "sanduk-ci"]) == 0
     assert engine.destroyed == ["sanduk-a1b2"]
-    assert engine.deleted_images == ["sanduk-hax:latest"]
+    # Every build of the recipe, and nothing of another recipe's.
+    assert engine.deleted_images == ["sanduk-hax:0123456789ab", "sanduk-hax:ba9876543210"]
     assert engine.deleted_networks == ["sanduk-ci", "sanduk-open", "sanduk-net"]
 
 

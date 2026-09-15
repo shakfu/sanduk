@@ -472,7 +472,11 @@ def test_apple_passes_no_build_args(monkeypatch):
 def test_every_image_takes_the_callers_uid(name):
     """Docker only warns about an unused --build-arg, so an image without the
     ARG would build and then fail to write its mount."""
-    text = get_agent(name).containerfile.read_text()
+    from sanduk import recipes
+
+    agent = get_agent(name)
+    recipe = recipes.resolve(agent.recipe)
+    text = recipes.render_recipe(recipe, agent.skills_dir).containerfile
     assert "ARG AGENT_UID=1000" in text and "ARG AGENT_GID=1000" in text
     assert "LABEL sanduk.agent-uid=$AGENT_UID" in text
 

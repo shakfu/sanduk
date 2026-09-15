@@ -24,6 +24,7 @@ import pytest
 
 from sanduk import assistants, proxy
 from sanduk.agent import get_agent
+from sanduk.cli import parse_args, resolve_image
 from sanduk.errors import AgentboxError
 from sanduk.providers import OPENAI_CHAT, get_provider
 from sanduk.runtime import ContainerSpec, get_runtime, wait_for_gateway
@@ -32,7 +33,12 @@ pytestmark = pytest.mark.container
 
 ENGINE = get_runtime(os.environ.get("RUNTIME"))
 AGENT = get_agent(os.environ.get("AGENT", "claude"))
-IMAGE = os.environ.get("IMAGE", AGENT.image)
+IMAGE = (
+    os.environ.get("IMAGE")
+    or resolve_image(
+        parse_args(["build", "--agent", AGENT.name, "--runtime", ENGINE.name])
+    )[1].tag
+)
 NETWORK = os.environ.get("NETWORK", "sanduk-net")
 # Docker's --runtime, e.g. runsc: the same suite under another OCI runtime.
 OCI_RUNTIME = os.environ.get("OCI_RUNTIME")

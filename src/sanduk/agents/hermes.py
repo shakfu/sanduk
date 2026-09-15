@@ -23,7 +23,7 @@ import argparse
 import re
 from typing import Any
 
-from sanduk.agent import RESOURCES, Agent, Outcome, Reader, Wiring
+from sanduk.agent import Agent, Outcome, Reader, Wiring
 from sanduk.errors import AgentboxError
 from sanduk.providers import OPENAI_CHAT, Provider
 
@@ -105,8 +105,8 @@ class HermesReader(Reader):
 
 class Hermes(Agent):
     name = "hermes"
-    image = "sanduk-hermes:latest"
-    containerfile = RESOURCES / "Containerfile.hermes"
+    recipe = "hermes"
+    skills_dir = ".hermes/skills"
     protocols = frozenset({OPENAI_CHAT})
 
     def check(self, args: argparse.Namespace, provider: Provider) -> None:

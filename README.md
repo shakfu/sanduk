@@ -46,7 +46,7 @@ In its stronger mode the container has no route off the host and never holds the
 
 Apple's `container` runs **Linux** containers as lightweight VMs. There is no such thing as a macOS container here; anything needing Xcode or the macOS toolchain cannot be the workload.
 
-Each agent has its own image. Claude Code, codex, opencode, pi and prime-agent run on `node:22-slim`; hermes is a Python package, so its image is `python:3.12-slim`; hax's is `debian:trixie-slim` with no language runtime, since the binary is static. All add `git`, `ripgrep`, `curl`, `jq`, and `python3`. The agent can only run what is in it. Without an interpreter it falls back to hand-tracing and still writes a confident report, so check whether the findings say they were reproduced. There is no C, Go, or Rust toolchain: point `--image` at your own, or `--containerfile` at one to build.
+Each agent has its own image. Claude Code, codex, opencode, pi and prime-agent run on `node:22-slim`; hermes is a Python package, so its image is `python:3.12-slim`; hax's is `debian:trixie-slim` with no language runtime, since the binary is static. All add `git`, `ripgrep`, `curl`, `jq`, and `python3`. The agent can only run what is in it. Without an interpreter it falls back to hand-tracing and still writes a confident report, so check whether the findings say they were reproduced. There is no C, Go, or Rust toolchain: add it with a [kit or recipe](#kits-and-recipes), point `--image` at your own image, or `--containerfile` at one to build.
 
 ## Install
 
@@ -56,7 +56,7 @@ pip install sanduk
 
 Note that `uv tool install sanduk` and `pipx install sanduk` do the same thing into their own environment, which is what you want for a globally available command line tool. There are no Python dependencies to resolve either way; a container engine remains as a requirement.
 
-The wheel carries a `Containerfile` per agent, so `sanduk build` works from a plain install with no checkout.
+The wheel carries a recipe per agent, so `sanduk build` works from a plain install with no checkout.
 
 ## Quickstart
 
@@ -116,6 +116,8 @@ sanduk system status       whether the engine is ready
 sanduk list agents         what each registered handler speaks
 sanduk list providers      the URL an agent must be given, per provider
 sanduk list runtimes       engines, whether each is installed, and the default
+sanduk list recipes        image recipes, each with its agent and kits
+sanduk list kits           kits of tools and skills, each with the hash a recipe pins
 
 sanduk assistant add <dir> register a scheduled assistant
 sanduk tell <name> <text>  queue a message for its next wakeup
@@ -195,6 +197,33 @@ prime-agent is pi's CLI in PrimeIntellect's build: the release tarball declares 
 
 pi speaks all three protocols the relay carries, and its provider block names which one with an `api` field. It reads providers from `models.json` in its config directory, not from a variable or a flag, so the image's entrypoint writes that file from `SANDUK_PI_MODELS` and pi is never given the bind mount as a place to find one. `--model` is required, and `--no-approve` is passed so a `.pi/settings.json` in the mounted repository cannot steer the run. With `--provider anthropic` the base URL is the bare root: pi appends `/v1/messages` itself.
 
+## Kits and recipes
+
+A recipe is a JSON description of an agent image: base image, agent, install sections and kits. sanduk renders it to one Containerfile. Each agent's image comes from a shipped recipe. A kit is a bundle of pinned tools and skills, such as `docs`: d2 and officecli, with a skill for each.
+
+```text
+sanduk run 'Draw the module graph.' --agent claude --kit docs      add a kit, unpinned
+sanduk run 'Draw the module graph.' --recipe claude-docs           a recipe that pins it
+sanduk build --recipe claude-docs --dry-run                        print the resolved recipe and Containerfile
+```
+
+```json
+{
+  "name": "claude-docs",
+  "inherits": "claude",
+  "kits": [{"name": "docs", "sha256": "<sha256 of kit.json>"}]
+}
+```
+
+- A recipe pins each kit by the SHA-256 of its `kit.json`, as `sanduk list kits` prints it. A changed kit stops the build.
+- `kit.json` pins every download and every skill file by its own hash, so the recipe's pin covers the whole kit.
+- Recipes inherit by name, left to right. A child can `remove` inherited kits, sections, env keys or section types.
+- A kit's skills land where the agent reads skills: `~/.claude/skills` for claude, `~/.agents/skills` for codex, hax, opencode and pi, `~/.hermes/skills` for hermes. They are root-owned and read-only.
+- Everything is installed at build time, so a `sealed` run fetches nothing. A kit that needs the network at run time is refused under `sealed`.
+- The image tag is `sanduk-<recipe>:<hash>` over everything the build reads. An edited recipe or kit builds a new image; `sanduk destroy` deletes every build of the recipe.
+
+Your own recipes and kits go in `~/.config/sanduk/recipes/<name>.json` and `~/.config/sanduk/kits/<name>/kit.json`, or are named by path. A name is never looked up in the working directory, and a name shipped with sanduk cannot be replaced. `assistant.toml` takes `recipe = "..."`. The build runs as root with network access, outside every mode, so a third-party kit or recipe has the power of a Containerfile. See [docs/dev/kits.md](docs/dev/kits.md) for the format.
+
 ## How the relay works
 
 1. `sanduk-net` is created with `--internal`: no route off the host.
@@ -243,7 +272,7 @@ A run records the containers it owns, and its own pid, under `$XDG_STATE_HOME/sa
 
 ```toml
 # assistant.toml
-agent    = "pi"
+agent    = "pi"           # or recipe = "claude-docs": the recipe names its agent
 provider = "anthropic"
 model    = "claude-sonnet-5"
 every    = "30m"          # an interval, not a cron expression
@@ -298,6 +327,10 @@ src/sanduk/
     runtime.py     container engines; ContainerSpec; `apple` and `docker`
     providers.py   provider records, wire protocols, route tables
     agent.py       the agent strategy: interface, registry, plugin loading
+    recipes.py     recipes: inheritance, kit pins, rendering, image tags
+    kits.py        kits: tools, skills, and the hashes that pin them
+    sections.py    install steps recipes and kits share, and their checks
+    catalog.py     finding recipes and kits by name
     runs.py        which process owns which container; the orphan sweep
     assistants.py  identity, schedule, mailbox: the assistant commands
     agents/        the shipped handlers: claude.py, codex.py, hax.py,
@@ -305,13 +338,9 @@ src/sanduk/
     proxy.py       the host-side relay
     preflight.py   key validation, macOS firewall check
     resources/
-        Containerfile.claude
-        Containerfile.codex
-        Containerfile.hax
-        Containerfile.hermes
-        Containerfile.opencode
-        Containerfile.pi
-        Containerfile.prime
+        recipes/   claude.json, codex.json, hax.json, hermes.json,
+                   opencode.json, pi.json, prime.json, claude-docs.json
+        kits/      docs/
 ```
 
 Another agent is an `Agent` subclass in any package; see [docs/agents.md](docs/agents.md). A third engine is a `Runtime` subclass and a `RUNTIMES` entry. It must supply four things: the CLI name, the verb that deletes a container (`rm`, not `delete`), how `network inspect` reports the gateway, and whether the host bridge needs a placeholder container to exist at all.
@@ -398,6 +427,8 @@ The per-agent rows are one task and one local model, counted by the relay throug
 ## Known traps
 
 The macOS application firewall silently drops connections to a binary set to "Block incoming connections", so the agent's first API call hangs until `--timeout` rather than failing. Homebrew's Python is shipped blocked on at least one machine; uv's interpreters are signed and auto-allowed. `--proxy` runs a preflight that names the exact `socketfilterfw --unblockapp` command when it sees an explicit block. It cannot detect an interpreter that will merely prompt.
+
+Apple's builder (`container` 1.2.0) can copy a directory as an empty one: `COPY dir/ dest/` did so in 5 of 5 clean builds unless the same build also copied a file by name. Recipes copy each file by name. A Containerfile of your own passed to `--containerfile` should too.
 
 `AF_UNIX` paths cap at 104 bytes on macOS, which matters if you point `--log-dir` somewhere deep.
 

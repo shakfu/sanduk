@@ -15,7 +15,7 @@ from __future__ import annotations
 import argparse
 from typing import Any
 
-from sanduk.agent import RESOURCES, Agent, Outcome, Reader, Wiring
+from sanduk.agent import Agent, Outcome, Reader, Wiring
 from sanduk.providers import OPENAI_RESPONSES, Provider
 
 # The provider id sanduk defines in codex's config. Any name would do; this one
@@ -82,8 +82,8 @@ class CodexReader(Reader):
 
 class Codex(Agent):
     name = "codex"
-    image = "sanduk-codex:latest"
-    containerfile = RESOURCES / "Containerfile.codex"
+    recipe = "codex"
+    skills_dir = ".agents/skills"
     protocols = frozenset({OPENAI_RESPONSES})
 
     def wire(

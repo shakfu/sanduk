@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from typing import Any
 
-from sanduk.agent import RESOURCES, Agent, Outcome, Reader, Wiring
+from sanduk.agent import Agent, Outcome, Reader, Wiring
 from sanduk.providers import ANTHROPIC_MESSAGES, Provider
 
 
@@ -60,8 +60,8 @@ class ClaudeReader(Reader):
 
 class ClaudeCode(Agent):
     name = "claude"
-    image = "sanduk:latest"
-    containerfile = RESOURCES / "Containerfile.claude"
+    recipe = "claude"
+    skills_dir = ".claude/skills"
     protocols = frozenset({ANTHROPIC_MESSAGES})
 
     def argv(

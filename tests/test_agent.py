@@ -60,11 +60,14 @@ def test_the_shipped_handlers_are_found_without_install_metadata():
 
 
 @pytest.mark.parametrize("agent", BUILTIN)
-def test_every_shipped_handler_names_an_image_and_a_containerfile(agent):
-    """The Containerfile is package data reached through __file__; a rename that
-    misses one handler is only visible on a build otherwise."""
-    assert agent.image
-    assert agent.containerfile is not None and agent.containerfile.is_file()
+def test_every_shipped_handler_names_a_recipe_that_builds_it(agent):
+    """The recipe is package data found by name; a rename that misses one
+    handler is only visible on a build otherwise."""
+    from sanduk import recipes
+
+    recipe = recipes.resolve(agent.recipe)
+    assert recipe.agent == agent.name
+    recipes.render_recipe(recipe, agent.skills_dir)
 
 
 def test_an_unknown_agent_names_the_known_ones():
@@ -710,7 +713,7 @@ def test_prime_is_pi_in_another_build():
     assert issubclass(Prime, Pi)
     assert Prime.protocols == Pi.protocols
     assert Prime().reader().__class__ is Pi().reader().__class__
-    assert Prime.image != Pi.image and Prime.containerfile != Pi.containerfile
+    assert Prime.recipe != Pi.recipe
 
 
 def test_prime_names_the_key_variable_where_pi_dereferences_it():

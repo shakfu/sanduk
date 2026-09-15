@@ -15,13 +15,6 @@ import pathlib
 import pytest
 
 SCRIPT = pathlib.Path(__file__).parent.parent / "scripts" / "sanduk.py"
-RESOURCE = (
-    pathlib.Path(__file__).parent.parent
-    / "src"
-    / "sanduk"
-    / "resources"
-    / "Containerfile.claude"
-)
 
 
 def embedded_containerfile():
@@ -36,8 +29,11 @@ def embedded_containerfile():
 
 
 @pytest.mark.skipif(not SCRIPT.is_file(), reason="scripts/ is not in this tree")
-def test_embedded_containerfile_matches_the_packaged_one():
-    assert embedded_containerfile() == RESOURCE.read_text()
+def test_embedded_containerfile_matches_the_claude_recipe():
+    from sanduk import recipes
+
+    rendered = recipes.render_recipe(recipes.resolve("claude"), ".claude/skills")
+    assert embedded_containerfile() == rendered.containerfile
 
 
 @pytest.mark.skipif(not SCRIPT.is_file(), reason="scripts/ is not in this tree")
@@ -45,7 +41,7 @@ def test_line_continuations_survived_the_embedding():
     """A plain triple-quoted literal would splice these away and corrupt the
     build; the constant has to be a raw string."""
     lines = embedded_containerfile().splitlines()
-    assert sum(1 for line in lines if line.endswith("\\")) == 7
+    assert sum(1 for line in lines if line.endswith("\\")) == 16
 
 
 # The relay's implementation is no longer AST-comparable. The package's is
@@ -84,7 +80,10 @@ ARCHITECTURAL = {
 # accident pointing the other way: definitions() merges the package's modules in
 # file order, so util.run overwrites cli.run and the comparison happens to land
 # on the pair that was meant.
-COLLIDING = {"destroy"}
+#
+# `build_image` is the same kind of accident: the script builds from its
+# embedded copy, the package from a rendered recipe.
+COLLIDING = {"destroy", "build_image"}
 
 PACKAGE = pathlib.Path(__file__).parent.parent / "src" / "sanduk"
 

@@ -12,14 +12,14 @@ one reader has to change and this file says which handler owns the difference.
 
 from __future__ import annotations
 
-from sanduk.agent import RESOURCES
 from sanduk.agents.pi import Pi
 
 
 class Prime(Pi):
     name = "prime"
-    image = "sanduk-prime:latest"
-    containerfile = RESOURCES / "Containerfile.prime"
+    recipe = "prime"
+    # pi reads ~/.agents/skills; whether this build does is not measured.
+    skills_dir = None
     key_env = "PRIME_RELAY_KEY"
     base_url_env = "PRIME_RELAY_BASE_URL"
     # 0.9.4 has no --no-approve, so a `.prime/agent/settings.json` in the

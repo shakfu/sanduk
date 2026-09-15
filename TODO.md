@@ -14,7 +14,7 @@ Ordered by how much they would change a decision, not by effort.
 
 - [ ] change default cloud provider to openai and model to openai-5.6-luna
 
-- [ ] **Trial shell-output compressors with claude: none, rtk, snip.** Run one task through `--agent claude --provider anthropic --mode sealed` in three images: stock, with [rtk](https://github.com/rtk-ai/rtk), and with [snip](https://github.com/edouard-claude/snip). Both install a Claude Code PreToolUse hook. Build the two variants with `--containerfile`, pinning a release binary by checksum and running the global `init`. Pick a test- and git-heavy task; neither tool shrinks file reads, so a review task shows little. Run each arm 3 times with a fixed `--model`, `--stats-file` and `--log-bodies`.
+- [ ] **Trial shell-output compressors with claude: none, rtk, snip.** Run one task through `--agent claude --provider anthropic --mode sealed` in three images: stock, with [rtk](https://github.com/rtk-ai/rtk), and with [snip](https://github.com/edouard-claude/snip). Both install a Claude Code PreToolUse hook. Build the two variants as kits: a pinned `binary` tool, `hook: true`, and a claude `setup` running the global `init`. Pick a test- and git-heavy task; neither tool shrinks file reads, so a review task shows little. Run each arm 3 times with a fixed `--model`, `--stats-file` and `--log-bodies`.
 
   Compare cost per arm. The relay prices nothing for Anthropic, and `--budget` is refused there. Two figures, which should agree:
   - Claude Code's `total_cost_usd`, the `$` in the stats line. Its own estimate.
@@ -45,6 +45,12 @@ Ordered by how much they would change a decision, not by effort.
 
 - [ ] **Kata Containers under `--oci-runtime`.** A VM per container on Linux, where Docker otherwise shares the host kernel. Measure `sealed` mode (the relay on the host gateway), `/work` under Cloud Hypervisor or QEMU, and Firecracker's lack of filesystem sharing. Needs KVM; standard GitHub runners may not expose it. See [docs/dev/microvms.md](docs/dev/microvms.md).
 
+- [ ] **Recipes under Docker and on amd64.** Every recipe was built and run on Apple's `container` 1.2.0, arm64 only. The uid build args, the amd64 artifacts and `docker image ls` in `destroy` are unexercised. The scheduled `images` CI job covers the agents; nothing builds `claude-docs`.
+
+- [ ] **An agent task that uses a kit.** d2 and officecli ran inside `claude-docs`, but no agent has been given a task that needs them, in `sealed` or otherwise. Also measure what installed skills cost: one task with and without `--kit docs`, comparing the relay log's per-call `in=` counts.
+
+- [ ] **Where prime reads skills.** Its handler has no `skills_dir`, so kits with skills are refused for it. pi reads `~/.agents/skills`; whether PrimeIntellect's build does is not measured.
+
 - [ ] **A long run.** Everything measured so far finishes in ~35s. No real agent has hit `--timeout`, exhausted `--max-turns`, or run long enough to trigger context compaction.
 
 ### Correctness
@@ -68,6 +74,10 @@ Ordered by how much they would change a decision, not by effort.
 ### Design
 
 - [ ] **`sanduk-logs` grows without bound.** No rotation, no cap.
+
+- [ ] **Recipe builds accumulate.** Each edit to a recipe or kit builds a new `sanduk-<recipe>:<hash>` image, and nothing deletes the old ones until `sanduk destroy`, which deletes them all. Deleting superseded tags after a build is the obvious fix; an older tag may belong to a run still in flight.
+
+- [ ] **Kits waiting to ship.** `rtk` and `snip` wait for the compressor trial above. `quarto` needs a decision: offline Typst PDF only, or a larger kit with TinyTeX preinstalled, since LaTeX PDF fetches packages at run time. See [docs/dev/kits.md](docs/dev/kits.md).
 
 ## Low
 

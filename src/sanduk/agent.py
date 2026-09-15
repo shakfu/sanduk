@@ -37,10 +37,10 @@ from sanduk.errors import AgentboxError
 from sanduk.providers import Provider
 from sanduk.util import note
 
-# Containerfiles ship inside the package so a `pip install sanduk` can build an
-# image without a checkout. __file__ rather than importlib.resources: the engine
-# needs a real path on disk for `build -f`, which a Traversable does not
-# promise.
+# Recipes and kits ship inside the package so a `pip install sanduk` can build
+# an image without a checkout. __file__ rather than importlib.resources: the
+# build context has to be read from a real path on disk, which a Traversable
+# does not promise.
 RESOURCES = Path(__file__).parent / "resources"
 
 ENTRY_POINT_GROUP = "sanduk.agents"
@@ -124,9 +124,15 @@ class Agent(ABC):
 
     #: Registry key and `--agent` value.
     name = ""
-    #: Image and Containerfile are per agent: `--agent hax` must not silently
-    #: reuse an image that has only Claude Code in it. Both are required; there
-    #: is no default that could be right for someone else's agent.
+    #: The recipe that builds this agent's image, by catalogue name or path.
+    #: Per agent: `--agent hax` must not silently reuse an image that has only
+    #: Claude Code in it. See docs/dev/kits.md.
+    recipe = ""
+    #: Where the agent reads user-global skills, relative to its home. None:
+    #: not known, so a kit carrying skills is refused for it.
+    skills_dir: str | None = None
+    #: A handler without a recipe names a prebuilt image and the Containerfile
+    #: that builds it instead. It takes no kits.
     image = ""
     containerfile: Path | None = None
     #: Wire protocols this agent can speak, from sanduk.providers.

@@ -158,6 +158,10 @@ class Runtime:
     def image_exists(self, image: str) -> bool:
         raise NotImplementedError
 
+    def image_tags(self, repository: str) -> list[str]:
+        """Every `repository:tag` this engine holds for one repository."""
+        raise NotImplementedError
+
     def delete_image(self, image: str) -> None:
         # `image delete` against `image rm`: the same split as containers, so
         # the same verb answers for both.
@@ -356,6 +360,17 @@ class AppleContainer(Runtime):
                 return True
         return False
 
+    def image_tags(self, repository: str) -> list[str]:
+        out = run([self.cli, "image", "list"], capture_output=True)
+        if out.returncode != 0:
+            return []
+        found = []
+        for line in out.stdout.splitlines()[1:]:
+            f = line.split()
+            if len(f) >= 2 and (f[0] == repository or f[0].endswith("/" + repository)):
+                found.append(f"{f[0]}:{f[1]}")
+        return found
+
     def network_info(self, name: str) -> tuple[str, str] | None:
         r = run([self.cli, "network", "inspect", name], capture_output=True)
         if r.returncode != 0:
@@ -464,6 +479,15 @@ class Docker(Runtime):
             run([self.cli, "image", "inspect", image], capture_output=True).returncode
             == 0
         )
+
+    def image_tags(self, repository: str) -> list[str]:
+        fmt = "{{.Repository}}:{{.Tag}}"
+        out = run(
+            [self.cli, "image", "ls", "--format", fmt, repository], capture_output=True
+        )
+        if out.returncode != 0:
+            return []
+        return [line for line in out.stdout.splitlines() if not line.endswith(":<none>")]
 
     def network_info(self, name: str) -> tuple[str, str] | None:
         r = run([self.cli, "network", "inspect", name], capture_output=True)

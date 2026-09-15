@@ -7,7 +7,9 @@ sanduk runs one agent CLI inside the container and reads its JSON stream. What t
 | | |
 |-|-|
 | `name` | the `--agent` value and the registry key |
-| `image`, `containerfile` | which image carries the program |
+| `recipe` | the recipe that builds the image; see [docs/dev/kits.md](dev/kits.md) |
+| `skills_dir` | where the agent reads skills, relative to its home; `None` if unknown |
+| `image`, `containerfile` | instead of `recipe`: a prebuilt image and the Containerfile that builds it. Takes no kits |
 | `protocols` | wire protocols the agent speaks, from `sanduk.providers` |
 | `argv()` | flags appended after the image in the container command |
 | `wire()` | the variables the agent reads its endpoint and credential from |

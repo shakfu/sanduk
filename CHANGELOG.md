@@ -6,7 +6,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- Design sketch for kits and recipes, not implemented. A recipe is a JSON description of an agent image that sanduk renders to one Containerfile. It replaces the seven hand-written Containerfiles and their duplicated uid block. A kit is a JSON bundle of pinned tools and one skill text shared by every agent, such as d2 and officecli. A recipe includes a kit by name and the SHA-256 of its `kit.json`, so a kit changed by a catalogue update stops the build rather than changing the image unseen. Parents are inherited by name, unpinned, and a child can remove inherited kits, sections, env keys or section types. The inheritance model comes from [start-vm](https://github.com/shakfu/start-vm), with parent sections ordered first, since a child step may need a parent's packages. See [docs/dev/kits.md](docs/dev/kits.md).
+- Kits and recipes. A recipe is a JSON description of an agent image, rendered to one Containerfile; each agent's image now comes from a shipped recipe, and the seven hand-written Containerfiles are gone. A kit is a bundle of pinned tools and one skill text shared by every agent. `docs` ships with d2 and officecli, and `claude-docs` is claude with it.
+
+  ```text
+  sanduk run 'Draw the module graph.' --agent claude --kit docs
+  sanduk run 'Draw the module graph.' --recipe claude-docs
+  sanduk build --recipe claude-docs --dry-run
+  sanduk list recipes | list kits
+  ```
+
+  A recipe pins each kit by the SHA-256 of its `kit.json`, and `kit.json` pins every download and skill file, so a changed kit stops the build rather than changing the image unseen. Recipes inherit by name, unpinned, with parent sections first, since a child step may need a parent's packages; start-vm, where the model comes from, runs the child's first. Images are tagged `sanduk-<recipe>:<hash>` over everything the build reads, so an old `sanduk:latest` or `sanduk-<agent>:latest` is no longer used or deleted by `destroy`: remove it with `container image delete` or `docker rmi`. Porting pinned three installs that were not: Claude Code, opencode's two provider drivers, and hax's tarball, which had no checksum. `assistant.toml` takes `recipe`, and `sanduk list agents` shows each agent's recipe where it showed an image. See [docs/dev/kits.md](docs/dev/kits.md).
 
 ### Fixed
 

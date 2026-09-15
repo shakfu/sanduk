@@ -113,6 +113,9 @@ class Engine:
     def image_exists(self, image):
         return True
 
+    def build_args(self):
+        return []
+
     def run_argv(self, spec):
         self.names.append(spec.name)
         return self.argv

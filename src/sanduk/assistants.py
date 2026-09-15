@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import cast
 
 from sanduk.agent import DEFAULT_AGENT
+from sanduk.catalog import is_path
 from sanduk.errors import AgentboxError
 from sanduk.providers import DEFAULT_PROVIDER
 from sanduk.runs import owner_alive
@@ -108,7 +109,8 @@ class Assistant:
 
     name: str
     dir: Path
-    agent: str
+    agent: str | None
+    recipe: str | None
     provider: str
     model: str | None
     runtime: str | None
@@ -143,7 +145,7 @@ def load(directory: Path) -> Assistant:
         raise AgentboxError(f"{path}: {e}") from None
 
     unknown = set(conf) - {
-        "name", "agent", "provider", "model", "runtime", "mode", "proxy",
+        "name", "agent", "recipe", "provider", "model", "runtime", "mode", "proxy",
         "timeout", "every", "brief", "gate", "max_failures", "approval",
         "mounts", "args",
     }  # fmt: skip
@@ -154,10 +156,17 @@ def load(directory: Path) -> Assistant:
         value = conf.get(key)
         return None if value is None else (directory / str(value))
 
+    recipe = None if conf.get("recipe") is None else str(conf["recipe"])
+    if recipe and is_path(recipe) and not Path(recipe).expanduser().is_absolute():
+        # Relative to the config file, like mounts: tick runs from anywhere.
+        recipe = str((directory / recipe).resolve())
+    agent = conf.get("agent")
     assistant = Assistant(
         name=str(conf.get("name", directory.name)),
         dir=directory,
-        agent=str(conf.get("agent", DEFAULT_AGENT)),
+        # A recipe names its agent; without one, the default agent's recipe.
+        agent=str(agent) if agent is not None else (None if recipe else DEFAULT_AGENT),
+        recipe=recipe,
         provider=str(conf.get("provider", DEFAULT_PROVIDER)),
         model=None if conf.get("model") is None else str(conf["model"]),
         runtime=None if conf.get("runtime") is None else str(conf["runtime"]),
@@ -468,13 +477,15 @@ def run_argv(
         str(assistant.workspace),
         "-o",
         str(report),
-        "--agent",
-        assistant.agent,
         "--provider",
         assistant.provider,
         "--timeout",
         str(assistant.timeout),
     ]
+    if assistant.agent:
+        argv += ["--agent", assistant.agent]
+    if assistant.recipe:
+        argv += ["--recipe", assistant.recipe]
     engine = runtime or assistant.runtime
     if engine:
         argv += ["--runtime", engine]

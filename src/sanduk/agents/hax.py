@@ -16,7 +16,6 @@ import argparse
 from typing import Any
 
 from sanduk.agent import (
-    RESOURCES,
     Agent,
     Outcome,
     Reader,
@@ -82,8 +81,8 @@ class HaxReader(Reader):
 
 class Hax(Agent):
     name = "hax"
-    image = "sanduk-hax:latest"
-    containerfile = RESOURCES / "Containerfile.hax"
+    recipe = "hax"
+    skills_dir = ".agents/skills"
     protocols = frozenset({ANTHROPIC_MESSAGES, OPENAI_CHAT})
 
     def check(self, args: argparse.Namespace, provider: Provider) -> None:

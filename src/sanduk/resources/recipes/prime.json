@@ -1,0 +1,46 @@
+{
+  "name": "prime",
+  "description": "prime-agent, pi's CLI in PrimeIntellect's build, from a checksummed release tarball",
+  "agent": "prime",
+  "from": "docker.io/library/node:22-slim",
+  "user": "node",
+  "home": "/home/node",
+  "sections": [
+    {
+      "name": "base-tools",
+      "type": "apt",
+      "install": ["git", "ripgrep", "ca-certificates", "curl", "jq", "python3"]
+    },
+    {
+      "name": "agent",
+      "type": "run",
+      "description": "the install also builds the Python kernel, prime-agent's only tool",
+      "lines": [
+        "release=https://pub-728493de92a943e2a9b2d17b4719f318.r2.dev/releases/v0.9.4",
+        "tarball=prime-agent-0.9.4.tgz",
+        "cd /tmp",
+        "curl -fsSL -o \"$tarball\" \"$release/$tarball\"",
+        "echo \"b8d752a53d11a8c9a7580e1fb5fc24f7ce74ccad979c7e6e6aa8880fc3ad90b0  $tarball\" | sha256sum -c -",
+        "HOME=/home/node PRIME_AGENT_CODING_AGENT_DIR=/home/node/.prime/agent PRIME_AGENT_INSTALL_UV=1 PRIME_AGENT_BOOTSTRAP_KERNEL_ON_INSTALL=1 PRIME_AGENT_BOOTSTRAP_TOOLS_ON_INSTALL=1 npm install -g \"/tmp/$tarball\"",
+        "rm -f \"/tmp/$tarball\"",
+        "npm cache clean --force",
+        "chown -R node:node /home/node"
+      ]
+    },
+    {
+      "name": "entrypoint",
+      "type": "copy",
+      "from": "files/sanduk-prime",
+      "to": "/usr/local/bin/sanduk-prime",
+      "mode": "0755"
+    }
+  ],
+  "env": {
+    "PATH": "/home/node/.local/bin:$PATH",
+    "PRIME_AGENT_CODING_AGENT_DIR": "/home/node/.prime/agent",
+    "PI_OFFLINE": "1",
+    "PI_SKIP_VERSION_CHECK": "1",
+    "PI_TELEMETRY": "0"
+  },
+  "entrypoint": ["sanduk-prime"]
+}

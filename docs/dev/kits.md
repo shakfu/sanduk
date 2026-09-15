@@ -1,6 +1,6 @@
 # Kits and recipes
 
-Status: sketch, 2026-09-15. Nothing implemented or measured. Tool and agent facts come from each project's docs and source on its default branch. start-vm facts come from [shakfu/start-vm](https://github.com/shakfu/start-vm) at `d8de8c7`. Inference is marked; unverified claims say UNCONFIRMED.
+Status: implemented 2026-09-15. The seven agent images and `claude-docs` were built with Apple's `container` 1.2.0; see [Verification](#verification). Not shipped: the `rtk`, `snip` and `quarto` kits. Tool and agent facts come from each project's docs and source on its default branch. start-vm facts come from [shakfu/start-vm](https://github.com/shakfu/start-vm) at `d8de8c7`. Inference is marked; unverified claims say UNCONFIRMED.
 
 Scope: JSON files that describe an agent image (recipes) and reusable bundles of tools and skills that recipes include by name (kits).
 
@@ -8,7 +8,7 @@ Scope: JSON files that describe an agent image (recipes) and reusable bundles of
 
 | Term | Meaning |
 |-|-|
-| kit | a named, versioned bundle of tools and skills. JSON. Included by recipes |
+| kit | a named bundle of tools and skills, identified by the hash of its `kit.json`. Included by recipes |
 | recipe | a JSON description of one agent image: base image, agent, install sections, kits. Renders to one Containerfile |
 | runtime | unchanged: the container engine, `--runtime apple` or `docker` |
 | agent handler | unchanged: `argv`, `wire`, `reader`. Gains `skills_dir` |
@@ -17,7 +17,7 @@ A recipe builds an image, not a runtime. `apple` and `docker` both build from th
 
 ## What kits and recipes add
 
-Today each agent has one hand-written Containerfile, and `--containerfile` swaps in another.
+Before this, each agent had one hand-written Containerfile, and `--containerfile` swapped in another.
 
 - **Composition.** `--recipe claude-docs`, or `--agent claude --kit docs`, without writing a Containerfile per combination.
 
@@ -64,7 +64,7 @@ What it gives:
 
 - `json` reads and writes. `build --dry-run` can print the resolved recipe.
 
-- A `$schema` key gives editor completion and validation. sanduk validates by hand, without `jsonschema`.
+- A `$schema` key is accepted and ignored, for editors. No schema file ships; sanduk validates by hand, without `jsonschema`.
 
 ## Section types
 
@@ -73,14 +73,14 @@ Recipes and kits share these types.
 | Type | Fields | Renders |
 |-|-|-|
 | `apt` | `install: [spec]` | `apt-get install --no-install-recommends`, then clears the lists |
-| `npm` | `install: ["pkg@version"]` | `npm install -g`; a version is required |
-| `pip` | `install: ["pkg==version"]` | `pip install`; a version is required |
-| `binary` | `artifacts.<arch>`: `url`, `sha256`, optional `member` | fetch, verify, install one file to `/usr/local/bin` |
-| `archive` | `artifacts.<arch>`: `url`, `sha256`; `dest`; `links` | fetch, verify, extract a tree to `dest`, symlink `links` onto `PATH` |
-| `copy` | `from` (relative to the JSON file), `to`, `mode` | `COPY` from the build context |
-| `run` | `lines: [str]`, `user: "root" \| "agent"` | `RUN set -eux; ...`. The escape hatch; flagged in listings |
+| `npm` | `install: ["pkg@version"]`, `flags` | `npm install -g`; an exact version is required |
+| `pip` | `install: ["pkg==version"]`, `flags` | `pip install --no-cache-dir`; an exact version is required |
+| `binary` | `artifacts.<arch>`: `url`, `sha256`, optional `member`; `path` | fetch, verify, install one file to `path`, default `/usr/local/bin/<name>`. `member` names it inside a `.tar.gz` |
+| `archive` | `artifacts.<arch>`: `url`, `sha256`, optional `strip`; `dest`; `links` | fetch, verify, extract a tree to `dest`, symlink `links` onto `PATH` |
+| `copy` | `from` (a file, relative to the JSON file), `to`, `mode` | `COPY` from the build context |
+| `run` | `lines: [str]`, `user: "root" \| "agent"` | a script in the build context, run with `sh -eu`. The escape hatch; flagged in listings |
 
-Every section has `name` and optional `description`. `<arch>` is `amd64` or `arm64`, matched against `dpkg --print-architecture` at build.
+Every section has `name` and optional `description`. `<arch>` is `amd64` or `arm64`, matched against `dpkg --print-architecture`, or `uname -m` where there is no dpkg. A `run` script is written to the context rather than spliced into a RUN line, so no quoting rule applies to it; it stays in the image under `/usr/local/share/sanduk/steps`.
 
 Architecture is the only platform axis. Every shipped base image is Debian with glibc, and both engines build Linux images. rtk's arm64 release is glibc-only, which would matter only for an Alpine `from`.
 
@@ -88,11 +88,10 @@ Architecture is the only platform axis. Every shipped base image is Debian with 
 
 ### A shipped recipe
 
-`Containerfile.claude` ported:
+`src/sanduk/resources/recipes/claude.json`:
 
 ```json
 {
-  "$schema": "../schema/recipe.schema.json",
   "name": "claude",
   "description": "Claude Code on node:22-slim",
   "agent": "claude",
@@ -108,7 +107,7 @@ Architecture is the only platform axis. Every shipped base image is Debian with 
     {
       "name": "agent",
       "type": "npm",
-      "install": ["@anthropic-ai/claude-code@<version>"]
+      "install": ["@anthropic-ai/claude-code@2.1.272"]
     }
   ],
   "env": {
@@ -214,81 +213,73 @@ One Containerfile per resolved recipe, in this order:
 
 1. `FROM`.
 
-2. Recipe sections as root.
+2. Recipe sections, then each kit's tool sections, as root.
 
-3. Each kit's tool sections as root, in kit order.
+3. The `AGENT_UID` block: `usermod` if `user` exists in `from`, `useradd` otherwise. Before the skills, which are copied into the user's home.
 
-4. Skills copied into `home/skills_dir`, root-owned, mode 0444.
+4. Skills, root-owned and read-only, under `home/skills_dir`. The directories above them stay the agent's.
 
-5. The `AGENT_UID` block: `usermod` if `user` exists, `useradd` otherwise. Last among root steps, so a uid change reuses the install layers.
+5. `USER`, then `ENV` (`HOME`, kit env, recipe env), then each kit's agent `setup` and any section with `user: "agent"`.
 
-6. `USER`, then each kit's agent `setup` and any `run` section with `user: "agent"`.
+6. `WORKDIR /work`, `LABEL sanduk.recipe=<name> sanduk.kits=<name>@<sha256>,...`, `ENTRYPOINT`.
 
-7. `ENV`, `WORKDIR /work`, `ENTRYPOINT`.
+A vendored skill is copied one file per `COPY`. A directory `COPY` left the directory empty on Apple's builder in 5 of 5 clean builds, unless the same build also copied a file by name.
 
-8. `LABEL sanduk.recipe=<name> sanduk.kits=<name>@<sha256>,...`.
+Kit env sits under recipe env. Two kits that set one key differently are refused unless the recipe sets it.
 
-The tag is `sanduk-<recipe>:<sha12>`. The hash covers the rendered Containerfile, every file copied into the context, and the build args. Everything is in one file, so a changed kit or parent changes the tag. No base-image staleness check is needed. Layer caching keeps unchanged steps.
+The tag is `sanduk-<recipe>:<sha12>`. The hash covers the rendered Containerfile, every file copied into the context, and the engine's build args, which carry the caller's uid under Docker. A changed kit or parent changes the tag. No base-image staleness check is needed. `--image` names a different tag for the same build.
 
-`destroy` deletes images labelled `sanduk.recipe`. Label filtering on Apple's CLI is UNCONFIRMED; the fallback is recording built tags under `$XDG_STATE_HOME/sanduk`.
+`destroy` deletes every tag in the recipe's repository, `sanduk-<recipe>`, as each engine's image listing reports it. Builds accumulate until then.
 
 ### Porting the shipped Containerfiles
 
-- **claude** installs `@anthropic-ai/claude-code` unpinned (`Containerfile.claude:7`). The other five package installs pin a version. The `npm` rule would refuse it, so the port pins it.
+- **claude** installed `@anthropic-ai/claude-code` unpinned. Now pinned at 2.1.272.
 
-- **hax** downloads its release tarball without a checksum (`Containerfile.hax`). The port uses `binary` with `sha256`.
+- **opencode** installed its two provider drivers unpinned. Now pinned: `@ai-sdk/openai-compatible@3.0.48`, `@ai-sdk/anthropic@4.0.53`.
 
-- **pi, prime** write their entrypoint with `printf`. The port copies a real script file, which can hold comments.
+- **hax** downloaded its release tarball without a checksum. Now a `binary` with the release's `SHA256SUMS` values.
 
-- **prime** installs a checksummed tarball with `npm` and build-time environment. That stays a `run` section.
+- **prime** verified its tarball against a `SHA256SUMS` fetched from the same origin at build. Now the hash is in the recipe.
 
-- **hax, hermes** create their user. The renderer handles both cases.
+- **pi, prime** wrote their entrypoint with `printf`. Now a `copy` of a real script file, which holds the comment.
 
-A third-party `Agent` with `containerfile` keeps working, without kits. The shipped handlers replace `image` and `containerfile` with `recipe = "claude"`.
+- **hax, hermes** create their user; the others modify `node`. The renderer handles both.
+
+`scripts/sanduk.py` embeds the rendered `claude` Containerfile; `tests/test_script.py` keeps the two identical.
+
+A handler without `recipe` names `image` and `containerfile` as before, and takes no kits. `--containerfile` still builds from a file, as does `--image` with an existing tag.
 
 ## Kits
 
 ### A bundle
 
+`src/sanduk/resources/kits/docs/kit.json`, shortened:
+
 ```json
 {
-  "$schema": "../../schema/kit.schema.json",
   "name": "docs",
-  "description": "Diagrams from D2 text; Office documents",
+  "description": "Diagrams from D2 text; Office documents with officecli",
   "tools": [
     {
       "name": "d2",
       "type": "binary",
-      "version": "0.9.0",
-      "license": "MPL-2.0",
-      "homepage": "https://github.com/d2lang/d2",
+      "description": "d2 0.9.0, MPL-2.0; renders PNG, PDF and PPTX without a browser",
       "artifacts": {
-        "amd64": {"url": "https://github.com/d2lang/d2/releases/download/v0.9.0/d2-v0.9.0-linux-amd64.tar.gz", "sha256": "...", "member": "d2-v0.9.0/bin/d2"},
-        "arm64": {"url": "https://github.com/d2lang/d2/releases/download/v0.9.0/d2-v0.9.0-linux-arm64.tar.gz", "sha256": "...", "member": "d2-v0.9.0/bin/d2"}
+        "amd64": {"url": ".../d2-v0.9.0-linux-amd64.tar.gz", "sha256": "5669...", "member": "d2-v0.9.0/bin/d2"},
+        "arm64": {"url": ".../d2-v0.9.0-linux-arm64.tar.gz", "sha256": "ac2c...", "member": "d2-v0.9.0/bin/d2"}
       }
     },
-    {
-      "name": "officecli",
-      "type": "binary",
-      "version": "1.0.150",
-      "license": "Apache-2.0",
-      "homepage": "https://github.com/iOfficeAI/OfficeCLI",
-      "artifacts": {
-        "amd64": {"url": "...", "sha256": "..."},
-        "arm64": {"url": "...", "sha256": "..."}
-      }
-    }
+    {"name": "officecli", "type": "binary", "artifacts": {"amd64": {"url": ".../officecli-linux-x64", "sha256": "face..."}, "arm64": {"...": "..."}}}
   ],
   "skills": [
-    {"path": "skills/d2", "files": {"SKILL.md": "..."}},
-    {"name": "officecli", "url": "https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/<commit>/SKILL.md", "sha256": "..."}
+    {"path": "skills/d2", "files": {"SKILL.md": "d314..."}},
+    {"name": "officecli", "url": "https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/0c713e5f.../SKILL.md", "sha256": "c950..."}
   ],
-  "env": {"OFFICECLI_SKIP_UPDATE": "1"},
-  "egress": false
+  "env": {"OFFICECLI_SKIP_UPDATE": "1", "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT": "1"}
 }
 ```
 
-The d2 archive layout in `member` is UNCONFIRMED. officecli's releases are raw binaries, so they have no `member`.
+A tool's version and license go in its `description`; a section takes no other keys.
 
 ### A hook kit
 
@@ -305,14 +296,14 @@ The d2 archive layout in `member` is UNCONFIRMED. officecli's releases are raw b
 }
 ```
 
-`rtk init -g` may prompt; a non-interactive flag is UNCONFIRMED.
+Not shipped. `rtk init -g` may prompt; a non-interactive flag is UNCONFIRMED.
 
 ### Fields
 
 | Field | Meaning |
 |-|-|
 | `name`, `description` | `name` equals the directory name |
-| `tools` | sections, each with optional `version`, `license`, `homepage` |
+| `tools` | sections |
 | `skills` | `path` (a `SKILL.md` directory in the kit) with `files`, a map of every file under it to its SHA-256; or `url` + `sha256` + `name` |
 | `env` | `ENV` lines |
 | `agents` | per-agent `setup` argv lists, run as the agent user. If present, only these agents are supported |
@@ -332,7 +323,7 @@ Every shipped agent discovers `SKILL.md` directories ([Agent Skills spec](https:
 | codex | `.agents/skills` (`.codex/skills` deprecated) | [host_roots.rs](https://github.com/openai/codex/blob/main/codex-rs/ext/skills/src/host_roots.rs) |
 | opencode | `.agents/skills`; also reads `.claude/skills` | [skill/index.ts](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/skill/index.ts) |
 | pi | `.agents/skills` | [skills.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/skills.md) |
-| prime | UNCONFIRMED; inference: as pi | -- |
+| prime | not set: UNCONFIRMED, so kit skills are refused for prime | -- |
 | hax | `.agents/skills` | [usage.md](https://github.com/OleksandrChekhovskyi/hax/blob/main/docs/usage.md) |
 | hermes | `.hermes/skills` | [skills.md](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/features/skills.md) |
 
@@ -382,7 +373,7 @@ Checked before the build, alongside `Agent.check()`:
 | a kit with `egress: true` under `--mode sealed` | the tool fails at its first call, after tokens are spent |
 | no artifact for the build architecture | the build fails late otherwise |
 | `hook: true` with `--allowed-tools` | a hook that allows its rewrite may pass a command the flag refuses ([compressors.md](compressors.md#unresolved)); untested |
-| `hook: true` with claude `--bare` | `--bare` drops hooks, so the kit does nothing |
+| `hook: true` with `--bare` | `--bare` drops hooks, so the kit does nothing |
 | kit skills for an agent with no `skills_dir`, and no `agents` entry for it | the tool is present, but nothing tells the agent it exists |
 | an `agents` map that omits the chosen agent | the kit declared which agents it supports |
 | two kits share a `provides` name | rtk and snip edit the same hook config |
@@ -416,12 +407,12 @@ Checked before the build, alongside `Agent.check()`:
 
 | Kit | Tools | Skills | Run-time network | Notes |
 |-|-|-|-|-|
-| `docs` | d2 0.9.0: static tarball, `SHA256SUMS` ([release](https://github.com/d2lang/d2/releases/tag/v0.9.0)); officecli 1.0.150: single-file .NET binary, glibc x64/arm64 ([repo](https://github.com/iOfficeAI/OfficeCLI)) | d2: vendored. officecli: upstream `SKILL.md` | d2: remote icons only. officecli: update check, off via `OFFICECLI_SKIP_UPDATE=1` | officecli PNG screenshots need a headless browser |
+| `docs` (shipped) | d2 0.9.0: static tarball, `SHA256SUMS` ([release](https://github.com/d2lang/d2/releases/tag/v0.9.0)); officecli 1.0.150: single-file .NET binary, glibc x64/arm64 ([repo](https://github.com/iOfficeAI/OfficeCLI)) | d2: vendored. officecli: upstream `SKILL.md` at the v1.0.150 commit | d2: remote icons only. officecli: a background self-upgrade unless `OFFICECLI_SKIP_UPDATE=1` (`src/officecli/Program.cs:268`) | officecli aborts without libicu; the kit sets .NET invariant globalization rather than an apt package whose name differs per Debian release. PNG screenshots need a headless browser |
 | `quarto` | quarto 1.10.18: 147 MB `archive`, glibc; bundles Deno, Pandoc, Typst ([configuration](https://github.com/quarto-dev/quarto-cli/blob/main/configuration)) | vendored | LaTeX PDF: `tlmgr` fetches missing packages ([docs](https://quarto.org/docs/output-formats/pdf-engine.html)) | Typst PDF works offline. TinyTeX must be installed at build |
 | `rtk` | rtk 0.49.0: x86_64 musl, aarch64 glibc | none; `rtk init -g` hook | none; telemetry opt-in | claude only, after the TODO trial |
 | `snip` | snip 0.25.2: static Go | its `SKILL.md` has no frontmatter; not usable | none found | shares `provides` with rtk |
 
-Start with `docs`: two single-binary tools, one vendored skill, one upstream skill. Compressors wait for the trial in [TODO.md](../../TODO.md). Their benefit is unmeasured, and the hook raises the `--allowed-tools` question.
+`docs` ships: two single-binary tools, one vendored skill, one upstream skill. Compressors wait for the trial in [TODO.md](../../TODO.md). Their benefit is unmeasured, and the hook raises the `--allowed-tools` question.
 
 `quarto` needs a decision: offline Typst PDF only, or a larger kit with TinyTeX preinstalled.
 
@@ -435,49 +426,25 @@ Start with `docs`: two single-binary tools, one vendored skill, one upstream ski
 
 4. **Claude Code plugins as the unit.** They bundle skills, hooks, MCP servers and `bin/` ([plugins-reference](https://code.claude.com/docs/en/plugins-reference)). They serve one agent of seven.
 
-## Stages
+## What was built
 
-1. Recipe loader, inheritance with `remove`, validation, renderer, tag hash; `build --recipe --dry-run`. Port `claude`.
+All five planned stages, as mechanism: recipes with inheritance and `remove`, every section type, kits with pins, skills, `setup`, `provides` and `hook`, lookup, refusals, `list recipes`, `list kits`, `build --dry-run`, and `recipe` in `assistant.toml`. Shipped: recipes for the seven agents, `claude-docs`, and the `docs` kit.
 
-2. Port the other 6 recipes; handlers take `recipe`; delete the Containerfiles.
+Not shipped: the `rtk` and `snip` kits, which wait for the TODO trial, and `quarto`, which waits for the Typst-or-TinyTeX decision.
 
-3. Kits: `binary`, `skills` with `files`, `env`, pins, lookup, refusals, `list kits`; ship `docs`.
+Code: `catalog.py` 136 lines, `sections.py` 326, `kits.py` 268, `recipes.py` 476, plus 275 changed lines in `cli.py`, `assistants.py`, `runtime.py` and `agent.py`. `tests/test_recipes.py` is 549 lines.
 
-4. `agents.setup`, `provides`, `hook`; `rtk` after the trial.
+## Verification
 
-5. `archive` and `pip`; `quarto`.
+- `make test`: the unit suite, including `tests/test_recipes.py`, which covers each refusal above, inheritance, `remove`, pins and rendering.
 
-Recipes come first to avoid alternative 1's throwaway layer. The cost is one stage before the first kit ships.
+- Built with Apple's `container` 1.2.0 on arm64, each image then asked its agent's version (`pytest -m container -k runs_its_agent`): claude, codex, hax, hermes, opencode, pi, prime.
 
-## Tests
+- The full `container` suite against the `hax` image: 11 passed, including the workdir mount in both directions.
 
-- Unit, no engine:
+- `claude-docs`: `d2` rendered a PNG and `officecli` created a `.docx` inside the image. Both skills sat under `~/.claude/skills`, root-owned and read-only; the agent could still write `~/.claude`.
 
-  - Inheritance: parent-first order, replacement in place, scalar precedence across multiple parents, the cycle message, `name` against file stem.
-
-  - `remove`: drops kits, sections, env keys and section types; stays within its own ancestry; refuses unknown names, unknown types and remove-plus-add by name; allows re-adding a removed type.
-
-  - Pins: a one-byte change to `kit.json` or a vendored skill file refuses the build; a child re-pin wins.
-
-  - Package spec rejection.
-
-  - Rendered Containerfile per shipped recipe against a golden file.
-
-  - Tag stable under JSON whitespace and key order.
-
-  - Each refusal; lookup shadowing.
-
-- `container` marker:
-
-  - Build every shipped recipe and run the agent's `--version`.
-
-  - Build `claude-docs`; in `sanduk shell`, check `d2 --version` and `~/.claude/skills/d2/SKILL.md`.
-
-  - Run one `sealed` task that renders a diagram.
-
-## Size
-
-Inference: 500-700 lines across loading, inheritance, rendering, kits and CLI. About as many again in tests. Plus 7 recipe files.
+- Not run: Docker, amd64, a `sealed` agent task using a kit.
 
 ## Open questions
 

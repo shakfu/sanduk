@@ -32,7 +32,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
-from sanduk import assistants
+from sanduk import assistants, catalog, kits, recipes
 from sanduk.agent import (
     DEFAULT_AGENT,
     REPORT_INSTRUCTION,
@@ -147,6 +147,38 @@ def engine_flags() -> argparse.ArgumentParser:
     return p
 
 
+def agent_flag(p: argparse.ArgumentParser | argparse._ArgumentGroup) -> None:
+    # Not argparse choices: a handler outside the registry is named as
+    # module:Class, which choices cannot express. No default here: a recipe
+    # names its agent, and an explicit --agent that disagrees is refused.
+    p.add_argument(
+        "--agent",
+        metavar="NAME",
+        help=f"agent handler (default: {DEFAULT_AGENT}, or the recipe's; installed: "
+        f"{', '.join(agent_names())}), or module:Class for an unpackaged one. "
+        "claude speaks Anthropic Messages only; hax also speaks OpenAI Chat "
+        "Completions, which is what the other providers need.",
+    )
+
+
+def image_flags(p: argparse.ArgumentParser | argparse._ArgumentGroup) -> None:
+    """--recipe and --kit: what the image is built from. See docs/dev/kits.md."""
+    p.add_argument(
+        "--recipe",
+        metavar="NAME|PATH",
+        help="recipe that builds the image (default: the agent's). `sanduk list "
+        "recipes` shows the catalogue",
+    )
+    p.add_argument(
+        "--kit",
+        action="append",
+        default=[],
+        metavar="NAME|PATH",
+        help="add a kit of tools and skills to the recipe, unpinned (repeatable). "
+        "`sanduk list kits` shows the catalogue",
+    )
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     argv = sys.argv[1:] if argv is None else argv
     if argv and not argv[0].startswith("-") and argv[0] not in COMMANDS:
@@ -200,31 +232,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="write the run's outcome here as JSON: exit, ok, stats, error, report",
     )
     g = p.add_argument_group("image")
+    image_flags(g)
     g.add_argument(
         "-i",
         "--image",
-        help="image to run (default: the agent's own, e.g. sanduk:latest)",
+        help="image to run (default: built from the agent's recipe)",
     )
     g.add_argument(
         "--containerfile",
         type=Path,
-        help="Containerfile used when the image must be built "
-        "(default: the agent's, shipped in the package)",
+        help="build the image from this Containerfile instead of a recipe",
     )
     g.add_argument("--rebuild", action="store_true", help="rebuild the image first")
 
     g = p.add_argument_group("agent")
-    g.add_argument(
-        "--agent",
-        default=DEFAULT_AGENT,
-        metavar="NAME",
-        # Not argparse choices: a handler outside the registry is named as
-        # module:Class, which choices cannot express.
-        help=f"agent handler (default: {DEFAULT_AGENT}; installed: "
-        f"{', '.join(agent_names())}), or module:Class for an unpackaged one. "
-        "claude speaks Anthropic Messages only; hax also speaks OpenAI Chat "
-        "Completions, which is what the other providers need.",
-    )
+    agent_flag(g)
     g.add_argument("--model", help="model id, e.g. claude-opus-5")
     g.add_argument("--effort", choices=["low", "medium", "high", "xhigh", "max"])
     g.add_argument("--max-turns", type=int)
@@ -422,18 +444,27 @@ def _add_engine_commands(
     engine = engine_flags()
 
     p = sub.add_parser("build", parents=[engine], help="build the agent's image")
-    p.add_argument("--agent", default=DEFAULT_AGENT, metavar="NAME")
-    p.add_argument("-i", "--image", help="tag to build (default: the agent's)")
-    p.add_argument("--containerfile", type=Path, help="default: the agent's")
+    agent_flag(p)
+    image_flags(p)
+    p.add_argument("-i", "--image", help="tag to build (default: the recipe's)")
+    p.add_argument(
+        "--containerfile", type=Path, help="build from this instead of a recipe"
+    )
     p.add_argument(
         "--force", action="store_true", help="rebuild even if the image exists"
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the resolved recipe and the Containerfile, and build nothing",
     )
 
     p = sub.add_parser(
         "shell", parents=[engine], help="interactive shell in the agent's image"
     )
-    p.add_argument("--agent", default=DEFAULT_AGENT, metavar="NAME")
-    p.add_argument("-i", "--image", help="image to enter (default: the agent's)")
+    agent_flag(p)
+    image_flags(p)
+    p.add_argument("-i", "--image", help="image to enter (default: the recipe's)")
     # resolve_image reads it; only run and build can build one.
     p.set_defaults(containerfile=None)
 
@@ -455,13 +486,16 @@ def _add_engine_commands(
     p = sub.add_parser(
         "destroy", parents=[engine], help="clean, plus the image and the network"
     )
-    p.add_argument("--agent", default=DEFAULT_AGENT, metavar="NAME")
-    p.add_argument("-i", "--image", help="image to delete (default: the agent's)")
+    agent_flag(p)
+    p.add_argument("--recipe", metavar="NAME|PATH", help="default: the agent's")
+    p.add_argument(
+        "-i", "--image", help="image to delete (default: every build of the recipe)"
+    )
     p.add_argument(
         "--proxy-network",
         help="also delete this network (default: every network a mode creates)",
     )
-    p.set_defaults(containerfile=None, all=False)
+    p.set_defaults(containerfile=None, all=False, kit=[])
 
     p = sub.add_parser(
         "system", parents=[engine], help="show or change the engine's own service"
@@ -539,32 +573,72 @@ def _add_assistant_commands(
 
 def _add_list(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     """`list` reads registries, not an engine, so it takes no engine flags."""
-    p = sub.add_parser("list", help="show registered agents, providers, runtimes")
-    p.add_argument("axis", choices=["agents", "providers", "runtimes"])
+    p = sub.add_parser(
+        "list", help="show registered agents, providers, runtimes, recipes, kits"
+    )
+    p.add_argument("axis", choices=["agents", "providers", "runtimes", "recipes", "kits"])
 
 
 def build(args: argparse.Namespace) -> int:
     runtime = get_runtime(args.runtime)
-    _, image, containerfile = resolve_image(args)
-    runtime.require()
-    if runtime.image_exists(image) and not args.force:
-        note(f"{image} is already built (--force to rebuild)")
+    _, image = resolve_image(args)
+    if args.dry_run:
+        print_build(image)
         return 0
-    runtime.build_image(image, containerfile)
+    runtime.require()
+    if runtime.image_exists(image.tag) and not args.force:
+        note(f"{image.tag} is already built (--force to rebuild)")
+        return 0
+    build_image(runtime, image)
     return 0
+
+
+def print_build(image: Image) -> None:
+    """What `build` would do: the resolved recipe, then the Containerfile."""
+    print(f"# image: {image.tag}")
+    if image.recipe is None or image.rendered is None:
+        assert image.containerfile is not None
+        print(f"# containerfile: {image.containerfile}")
+        print(image.containerfile.read_text(), end="")
+        return
+    print("# recipe, resolved:")
+    print(json.dumps(image.recipe.as_json(), indent=2))
+    for rel in sorted(image.rendered.files):
+        print(f"# build context: {rel}")
+    print("# Containerfile:")
+    print(image.rendered.containerfile, end="")
+
+
+def build_image(runtime: Runtime, image: Image) -> None:
+    if image.rendered is not None:
+        recipes.build(runtime, image.tag, image.rendered)
+    else:
+        assert image.containerfile is not None
+        runtime.build_image(image.tag, image.containerfile)
+
+
+def selectors(args: argparse.Namespace) -> str:
+    """The flags that chose this image, for a command the user is told to run."""
+    parts = [f"--recipe {args.recipe}"] if getattr(args, "recipe", None) else []
+    if not parts or getattr(args, "image", None):
+        parts.append(f"--agent {args.agent}")
+    parts += [f"--kit {k}" for k in getattr(args, "kit", [])]
+    if getattr(args, "image", None):
+        parts.append(f"--image {args.image}")
+    return " ".join(parts)
 
 
 def shell(args: argparse.Namespace) -> int:
     runtime = get_runtime(args.runtime)
-    _, image, _ = resolve_image(args)
+    _, image = resolve_image(args)
     runtime.require()
-    if not runtime.image_exists(image):
+    if not runtime.image_exists(image.tag):
         raise AgentboxError(
-            f"{image} is not built. Run: sanduk build --agent {args.agent}"
+            f"{image.tag} is not built. Run: sanduk build {selectors(args)}"
         )
     # Handed straight to the terminal: this one inherits the tty rather than
     # having its stdout read.
-    return subprocess.call(runtime.shell_argv(image))
+    return subprocess.call(runtime.shell_argv(image.tag))
 
 
 def ps(args: argparse.Namespace) -> int:
@@ -628,9 +702,17 @@ def destroy(args: argparse.Namespace) -> int:
     point of putting it there.
     """
     runtime = get_runtime(args.runtime)
-    _, image, _ = resolve_image(args)
+    _, image = resolve_image(args)
     clean(args)
-    runtime.delete_image(image)
+    if image.recipe is not None and not args.image:
+        # Every build of the recipe: each edit to it, or to a kit, is a new tag.
+        tags = runtime.image_tags(recipes.repository(image.recipe.name))
+        for tag in tags:
+            runtime.delete_image(tag)
+        if not tags:
+            note(f"no images of recipe {image.recipe.name}")
+    else:
+        runtime.delete_image(image.tag)
     for network in mode_networks(args.proxy_network):
         runtime.delete_network(network)
     return 0
@@ -665,7 +747,29 @@ def show(args: argparse.Namespace) -> int:
     if args.axis == "agents":
         for name, agent in sorted(registry().items()):
             protocols = ", ".join(sorted(agent.protocols))
-            print(f"{name:9}  {agent.image:24}  {protocols}")
+            print(f"{name:9}  {agent.recipe or agent.image:24}  {protocols}")
+    elif args.axis == "recipes":
+        for name in catalog.names("recipes"):
+            try:
+                recipe = recipes.resolve(name)
+            except AgentboxError as e:
+                print(f"{name:16}  error: {e}")
+                continue
+            used = ", ".join(u.kit.name for u in recipe.kits) or "-"
+            print(f"{name:16}  {recipe.agent:9}  kits: {used}")
+    elif args.axis == "kits":
+        for name in catalog.names("kits"):
+            try:
+                kit = kits.load(name)
+            except AgentboxError as e:
+                print(f"{name:16}  error: {e}")
+                continue
+            tools = ", ".join(t.name for t in kit.tools) or "-"
+            marks = [m for m in ("hook", "egress") if getattr(kit, m)]
+            marks += sorted({t.type for t in kit.tools} & {"run", "apt"})
+            if kit.agents:
+                marks.append(f"agents: {', '.join(sorted(kit.agents))}")
+            print(f"{name:16}  {kit.sha256}  tools: {tools}  {'  '.join(marks)}".rstrip())
     elif args.axis == "providers":
         for name, provider in sorted(PROVIDERS.items()):
             url = f"{provider.scheme}://{provider.host}{provider.api_prefix}"
@@ -696,27 +800,92 @@ class Selection:
     agent: Agent
     provider: Provider
     image: str
-    containerfile: Path
+    build: Image
 
 
-def resolve_image(args: argparse.Namespace) -> tuple[Agent, str, Path]:
-    """(agent, image, Containerfile), before any provider is known.
+@dataclass(frozen=True)
+class Image:
+    """The image a command uses, and what builds it: a rendered recipe, or a
+    Containerfile from `--containerfile` or a handler without a recipe."""
+
+    tag: str
+    containerfile: Path | None = None
+    recipe: recipes.Recipe | None = None
+    rendered: recipes.Rendered | None = None
+
+
+def resolve_image(args: argparse.Namespace) -> tuple[Agent, Image]:
+    """The agent and its image, before any provider is known.
 
     `build` and `shell` need this and nothing else; `select` adds the provider.
+    Sets `args.agent` to the agent actually chosen, which a recipe may decide.
     """
-    agent = get_agent(args.agent)
-    containerfile = args.containerfile or agent.containerfile
-    if not agent.image or not containerfile:
+    recipe_spec = getattr(args, "recipe", None)
+    kit_specs: list[str] = getattr(args, "kit", None) or []
+    containerfile: Path | None = getattr(args, "containerfile", None)
+    if (recipe_spec or kit_specs) and (args.image or containerfile):
         raise AgentboxError(
-            f"agent {agent.name!r} names no image or Containerfile; pass "
-            "--image and --containerfile, or fix the handler"
+            "--recipe and --kit build an image from a recipe; they cannot be "
+            "combined with --image or --containerfile"
         )
-    return agent, args.image or agent.image, containerfile
+    recipe = recipes.resolve(recipe_spec, kit_specs) if recipe_spec else None
+    if recipe is not None and args.agent and args.agent != recipe.agent:
+        raise AgentboxError(
+            f"recipe {recipe.name} builds {recipe.agent}, not {args.agent}; drop "
+            "--agent or choose another recipe"
+        )
+    args.agent = recipe.agent if recipe is not None else (args.agent or DEFAULT_AGENT)
+    agent = get_agent(args.agent)
+
+    if containerfile is not None:
+        tag = args.image or agent.image or f"{CONTAINER_PREFIX}{agent.name}:custom"
+        return agent, Image(tag=tag, containerfile=containerfile)
+    if recipe is None and agent.recipe:
+        recipe = recipes.resolve(agent.recipe, kit_specs)
+    if recipe is None:
+        if kit_specs:
+            raise AgentboxError(
+                f"agent {agent.name!r} has no recipe, so it takes no kits"
+            )
+        if not agent.image or not agent.containerfile:
+            raise AgentboxError(
+                f"agent {agent.name!r} names no recipe, image or Containerfile; "
+                "pass --recipe, or --image and --containerfile"
+            )
+        return agent, Image(
+            tag=args.image or agent.image, containerfile=agent.containerfile
+        )
+
+    recipes.check(recipe, agent.name, agent.skills_dir, recipes.host_arch())
+    rendered = recipes.render_recipe(recipe, agent.skills_dir)
+    build_args = get_runtime(getattr(args, "runtime", None)).build_args()
+    tag = args.image or recipes.image_tag(recipe, rendered, build_args)
+    return agent, Image(tag=tag, recipe=recipe, rendered=rendered)
+
+
+def check_kits(args: argparse.Namespace, recipe: recipes.Recipe) -> None:
+    """Refuse a kit the run's own flags would defeat or break."""
+    for use in recipe.kits:
+        kit = use.kit
+        if kit.egress and not getattr(args, "egress", True):
+            raise AgentboxError(
+                f"kit {kit.name} needs the network at run time, which --mode "
+                "sealed has no route for. Use --mode key-safe, or drop the kit"
+            )
+        if kit.hook and getattr(args, "allowed_tools", None):
+            raise AgentboxError(
+                f"kit {kit.name} installs a hook that rewrites commands, which may "
+                "pass one --allowed-tools would refuse. Untested, so refused"
+            )
+        if kit.hook and getattr(args, "bare", False):
+            raise AgentboxError(
+                f"kit {kit.name} works through a hook, and --bare drops hooks"
+            )
 
 
 def select(args: argparse.Namespace) -> Selection:
     """Resolve the agent and provider together, and refuse an unusable pair."""
-    agent, image, containerfile = resolve_image(args)
+    agent, image = resolve_image(args)
     provider = resolve_provider(args)
     if getattr(args, "budget", None) is not None:
         if not provider.cost_field:
@@ -732,9 +901,9 @@ def select(args: argparse.Namespace) -> Selection:
     if not getattr(args, "model", None):
         args.model = provider.default_model
     agent.check(args, provider)
-    return Selection(
-        agent=agent, provider=provider, image=image, containerfile=containerfile
-    )
+    if image.recipe is not None:
+        check_kits(args, image.recipe)
+    return Selection(agent=agent, provider=provider, image=image.tag, build=image)
 
 
 def relay_root(args: argparse.Namespace, gateway: str = "", port: int = 0) -> str | None:
@@ -753,7 +922,7 @@ def container_env_names(args: argparse.Namespace, provider: Provider) -> tuple[s
     diverge for everything else, so the agent declares them and --agent-key-env
     overrides them.
     """
-    wiring = get_agent(args.agent).wire(args, provider, relay_root(args))
+    wiring = get_agent(args.agent or DEFAULT_AGENT).wire(args, provider, relay_root(args))
     return wiring.key_env, wiring.base_url_env
 
 
@@ -856,7 +1025,7 @@ def ensure_image(
     write `workdir`. Before any container starts: an agent that cannot write
     its report still spends the whole run's tokens."""
     if args.rebuild or not runtime.image_exists(sel.image):
-        runtime.build_image(sel.image, sel.containerfile)
+        build_image(runtime, sel.build)
     if not runtime.keeps_mount_owner:
         return
     uid = runtime.image_uid(sel.image)
@@ -880,10 +1049,9 @@ def ensure_image(
     if owner == 0:
         fix = "sanduk builds no agent as uid 0; use a workdir a non-root user owns"
     else:
-        image = f" --image {args.image}" if args.image else ""
         fix = (
-            f"rebuild it as uid {owner}: sanduk build --force --agent "
-            f"{sel.agent.name}{image} --runtime {args.runtime}"
+            f"rebuild it as uid {owner}: sanduk build --force "
+            f"{selectors(args)} --runtime {args.runtime}"
         )
     raise AgentboxError(
         f"{sel.image} runs its agent as uid {uid}, which cannot write {workdir} "

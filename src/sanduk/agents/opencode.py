@@ -18,7 +18,6 @@ import json
 from typing import Any
 
 from sanduk.agent import (
-    RESOURCES,
     Agent,
     Outcome,
     Reader,
@@ -100,8 +99,8 @@ class OpenCodeReader(Reader):
 
 class OpenCode(Agent):
     name = "opencode"
-    image = "sanduk-opencode:latest"
-    containerfile = RESOURCES / "Containerfile.opencode"
+    recipe = "opencode"
+    skills_dir = ".agents/skills"
     protocols = frozenset({ANTHROPIC_MESSAGES, OPENAI_CHAT})
 
     def check(self, args: argparse.Namespace, provider: Provider) -> None:

@@ -4,19 +4,26 @@
 
 sanduk is a Python CLI tool and package that makes it easy to run an agent inside a disposable container. The agent does its work, writes a report to a bind-mounted directory, and when it’s finished, the container is deleted.
 
-Seven agents are available: 
+Seven agents are available:
 
 - [claude code](https://claude.com/product/claude-code)
-- [codex](https://github.com/openai/codex) 
-- [hax](https://github.com/OleksandrChekhovskyi/hax) 
-- [hermes](https://github.com/NousResearch/hermes-agent) 
-- [opencode](https://github.com/sst/opencode) 
-- [pi](https://github.com/earendil-works/pi) 
+
+- [codex](https://github.com/openai/codex)
+
+- [hax](https://github.com/OleksandrChekhovskyi/hax)
+
+- [hermes](https://github.com/NousResearch/hermes-agent)
+
+- [opencode](https://github.com/sst/opencode)
+
+- [pi](https://github.com/earendil-works/pi)
+
 - [prime-agent](https://github.com/PrimeIntellect-ai/prime-agent)
 
 Two container engines are current supported:
 
 - [apple container](https://github.com/apple/container) on macOS
+
 - [docker](https://www.docker.com/)
 
 Each sits behind a registry -- an agent behind `sanduk.agent.Agent`, an engine behind `sanduk.runtime.Runtime` -- so another of either is one class. An agent can live in your own package and be found by entry point; see [docs/agents.md](docs/agents.md). Podman is not implemented.

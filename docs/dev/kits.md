@@ -20,9 +20,13 @@ A recipe builds an image, not a runtime. `apple` and `docker` both build from th
 Today each agent has one hand-written Containerfile, and `--containerfile` swaps in another.
 
 - **Composition.** `--recipe claude-docs`, or `--agent claude --kit docs`, without writing a Containerfile per combination.
+
 - **Per-agent integration.** A kit's skills land where the chosen agent reads skills.
+
 - **Checks before a run.** Refuse a kit that needs egress under `sealed`, or a hook kit under `--allowed-tools`.
+
 - **One copy of the invariants.** All 7 Containerfiles repeat the `AGENT_UID` block. A renderer emits it once.
+
 - **A catalogue.** `sanduk list kits` and `sanduk list recipes`.
 
 The ongoing cost is the catalogue. Each tool carries a version, one checksum per architecture, and skill text, all bumped by hand.
@@ -53,11 +57,13 @@ Decided: JSON for both kits and recipes. TOML only if it serves both; one format
 What JSON costs here:
 
 - **No comments.** The shipped Containerfiles keep their rationale in comments, e.g. why `Containerfile.prime` builds a Python kernel. In JSON, rationale moves to `description` fields, to copied script files, or to `docs/dev/`.
+
 - **Shell in strings.** `run` takes an array of lines; anything longer goes in a copied script.
 
 What it gives:
 
 - `json` reads and writes. `build --dry-run` can print the resolved recipe.
+
 - A `$schema` key gives editor completion and validation. sanduk validates by hand, without `jsonschema`.
 
 ## Section types
@@ -164,11 +170,17 @@ To change a single inherited section rather than drop it, redefine it under the 
 Merge rules:
 
 1. Parents resolve left to right, each with its own `remove` already applied.
+
 2. The child's `remove` applies to that merged result.
+
 3. The child's own fields apply last.
+
 4. Scalars: a later value replaces an earlier one.
+
 5. `sections`: parent order is kept. A later section with the same `name` replaces the earlier one in place. New names append.
+
 6. `kits`: merged by name in first-seen order. A later entry replaces an earlier one, so a child can re-pin a kit.
+
 7. A cycle is refused with its chain, e.g. `a -> b -> a`.
 
 A `remove` reaches only the recipe's own ancestry. With `inherits: ["a", "b"]`, `b` cannot remove what `a` contributes; the child inheriting both can.
@@ -189,8 +201,11 @@ The pin covers the whole kit only if `kit.json` pins everything else the kit use
 Consequences:
 
 - **A shipped kit updated in a sanduk release breaks every recipe that pins it,** until the pin is updated. This is intended: an image does not change without a recipe edit.
+
 - **`sanduk list kits` prints each kit's hash,** so re-pinning is a copy, not a computation.
+
 - **Parents are not pinned.** `inherits` takes names only, so an edit to `claude.json` changes `claude-docs` without an error. Pinning parents would break every child recipe on each sanduk release that touches a shipped recipe. The changed parent still changes the image tag, so the image is rebuilt rather than reused.
+
 - **`--kit docs` on the command line needs no pin.** sanduk prints the hash it used. Recipe files and `assistant.toml` go through recipes, so unattended runs are always pinned.
 
 ### Rendering
@@ -198,12 +213,19 @@ Consequences:
 One Containerfile per resolved recipe, in this order:
 
 1. `FROM`.
+
 2. Recipe sections as root.
+
 3. Each kit's tool sections as root, in kit order.
+
 4. Skills copied into `home/skills_dir`, root-owned, mode 0444.
+
 5. The `AGENT_UID` block: `usermod` if `user` exists, `useradd` otherwise. Last among root steps, so a uid change reuses the install layers.
+
 6. `USER`, then each kit's agent `setup` and any `run` section with `user: "agent"`.
+
 7. `ENV`, `WORKDIR /work`, `ENTRYPOINT`.
+
 8. `LABEL sanduk.recipe=<name> sanduk.kits=<name>@<sha256>,...`.
 
 The tag is `sanduk-<recipe>:<sha12>`. The hash covers the rendered Containerfile, every file copied into the context, and the build args. Everything is in one file, so a changed kit or parent changes the tag. No base-image staleness check is needed. Layer caching keeps unchanged steps.
@@ -213,9 +235,13 @@ The tag is `sanduk-<recipe>:<sha12>`. The hash covers the rendered Containerfile
 ### Porting the shipped Containerfiles
 
 - **claude** installs `@anthropic-ai/claude-code` unpinned (`Containerfile.claude:7`). The other five package installs pin a version. The `npm` rule would refuse it, so the port pins it.
+
 - **hax** downloads its release tarball without a checksum (`Containerfile.hax`). The port uses `binary` with `sha256`.
+
 - **pi, prime** write their entrypoint with `printf`. The port copies a real script file, which can hold comments.
+
 - **prime** installs a checksummed tarball with `npm` and build-time environment. That stays a `run` section.
+
 - **hax, hermes** create their user. The renderer handles both cases.
 
 A third-party `Agent` with `containerfile` keeps working, without kits. The shipped handlers replace `image` and `containerfile` with `recipe = "claude"`.
@@ -321,7 +347,9 @@ hermes writes its own skills into `.hermes/skills`. Root-owned kit skills there 
 In order; a name found in two places is refused:
 
 1. `$XDG_CONFIG_HOME/sanduk/recipes/<name>.json` and `$XDG_CONFIG_HOME/sanduk/kits/<name>/kit.json`.
+
 2. Entry point groups `sanduk.recipes` and `sanduk.kits`, each loading a `Path`.
+
 3. Shipped: `src/sanduk/resources/recipes/` and `src/sanduk/resources/kits/`.
 
 A user or third-party file named like a shipped one is refused, as `agent.py` refuses for handlers.
@@ -373,10 +401,15 @@ Checked before the build, alongside `Agent.check()`:
 ## Trust
 
 - **The build is outside every mode.** Recipes and kits run as root, with network access, at build time. `sealed` constrains the run only. A third-party recipe or kit has the power of a Containerfile.
+
 - **A skill is instruction.** The agent follows it; review it as a prompt.
+
 - **A hook rewrites commands.** `list kits` shows `hook`.
+
 - **The repository can shadow a skill.** hax searches project `.agents/skills` first ([usage.md](https://github.com/OleksandrChekhovskyi/hax/blob/main/docs/usage.md)), so `/work` can override a kit skill of the same name.
+
 - **Upstream installers are not used.** officecli's installer writes skills into every agent directory it finds. `rtk init` without `-g` writes project files.
+
 - **Telemetry and update checks** are disabled through `env` where a switch exists. `sealed` blocks them anyway; `open` and `key-safe` do not.
 
 ## First kits
@@ -395,16 +428,23 @@ Start with `docs`: two single-binary tools, one vendored skill, one upstream ski
 ## Alternatives considered
 
 1. **Kits without recipes.** Render a layer `FROM` the existing agent image. Ships kits one stage sooner. It needs a base-image staleness check that recipes make unnecessary, and becomes dead code once recipes land.
+
 2. **Containerfile fragments.** `--layer FILE` appends a snippet. About 50 lines. No skill placement, refusals or catalogue.
+
 3. **Run-time read-only mounts.** The host verifies Linux binaries into a cache and mounts tools and skills read-only. No rebuild per combination, and the agent cannot edit them. Cannot handle `apt`, `npm`, `pip` or hooks that edit agent config. Nested mounts under `$HOME` on Apple's engine are UNCONFIRMED.
+
 4. **Claude Code plugins as the unit.** They bundle skills, hooks, MCP servers and `bin/` ([plugins-reference](https://code.claude.com/docs/en/plugins-reference)). They serve one agent of seven.
 
 ## Stages
 
 1. Recipe loader, inheritance with `remove`, validation, renderer, tag hash; `build --recipe --dry-run`. Port `claude`.
+
 2. Port the other 6 recipes; handlers take `recipe`; delete the Containerfiles.
+
 3. Kits: `binary`, `skills` with `files`, `env`, pins, lookup, refusals, `list kits`; ship `docs`.
+
 4. `agents.setup`, `provides`, `hook`; `rtk` after the trial.
+
 5. `archive` and `pip`; `quarto`.
 
 Recipes come first to avoid alternative 1's throwaway layer. The cost is one stage before the first kit ships.
@@ -412,16 +452,27 @@ Recipes come first to avoid alternative 1's throwaway layer. The cost is one sta
 ## Tests
 
 - Unit, no engine:
+
   - Inheritance: parent-first order, replacement in place, scalar precedence across multiple parents, the cycle message, `name` against file stem.
+
   - `remove`: drops kits, sections, env keys and section types; stays within its own ancestry; refuses unknown names, unknown types and remove-plus-add by name; allows re-adding a removed type.
+
   - Pins: a one-byte change to `kit.json` or a vendored skill file refuses the build; a child re-pin wins.
+
   - Package spec rejection.
+
   - Rendered Containerfile per shipped recipe against a golden file.
+
   - Tag stable under JSON whitespace and key order.
+
   - Each refusal; lookup shadowing.
+
 - `container` marker:
+
   - Build every shipped recipe and run the agent's `--version`.
+
   - Build `claude-docs`; in `sanduk shell`, check `d2 --version` and `~/.claude/skills/d2/SKILL.md`.
+
   - Run one `sealed` task that renders a diagram.
 
 ## Size

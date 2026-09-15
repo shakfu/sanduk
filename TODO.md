@@ -18,6 +18,7 @@ Ordered by how much they would change a decision, not by effort.
 
   Compare cost per arm. The relay prices nothing for Anthropic, and `--budget` is refused there. Two figures, which should agree:
   - Claude Code's `total_cost_usd`, the `$` in the stats line. Its own estimate.
+
   - The relay log's per-call `in=`, `cache_write=`, `cache_read=` and `out=`, summed and priced at Anthropic's list rates. The stats line alone is not enough: it folds cache writes, billed above base input, into `in`.
 
   Also compare turns, wall time, and whether `REPORT.md` still finds what the stock arm found. Filters hide diff context and passing tests. Run with the default permission mode; a hook that allows its rewrite may bypass `--allowed-tools` (untested). See [docs/dev/compressors.md](docs/dev/compressors.md).
@@ -37,7 +38,9 @@ Ordered by how much they would change a decision, not by effort.
 ### Untested
 
 - [ ] Add support for other solutions:
+
     - docker sbx
+
     - nvidia openshell
 
 - [ ] **Kata Containers under `--oci-runtime`.** A VM per container on Linux, where Docker otherwise shares the host kernel. Measure `sealed` mode (the relay on the host gateway), `/work` under Cloud Hypervisor or QEMU, and Firecracker's lack of filesystem sharing. Needs KVM; standard GitHub runners may not expose it. See [docs/dev/microvms.md](docs/dev/microvms.md).

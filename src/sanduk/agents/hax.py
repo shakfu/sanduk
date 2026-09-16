@@ -83,6 +83,8 @@ class Hax(Agent):
     name = "hax"
     recipe = "hax"
     skills_dir = ".agents/skills"
+    # $XDG_CONFIG_HOME/hax/AGENTS.md. Skipped under --bare.
+    instructions_file = ".config/hax/AGENTS.md"
     protocols = frozenset({ANTHROPIC_MESSAGES, OPENAI_CHAT})
 
     def check(self, args: argparse.Namespace, provider: Provider) -> None:

@@ -60,6 +60,7 @@ RECIPE_KEYS = {
     "remove",
     "env",
     "entrypoint",
+    "instructions",
 }
 REMOVE_KEYS = {"kits", "sections", "env", "section_types"}
 IMAGE_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._/:@-")
@@ -70,6 +71,14 @@ class KitUse:
     kit: Kit
     pin: str | None  # None: named on the command line, unpinned
     pinned_by: str = ""
+
+
+@dataclass(frozen=True)
+class Instructions:
+    """Standing instructions for the agent, and the recipe that set them."""
+
+    owner: str
+    text: str
 
 
 @dataclass
@@ -87,6 +96,8 @@ class Recipe:
     sections: list[Section] = field(default_factory=list)
     kits: list[KitUse] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
+    # Parents first: a child appends to what it inherits.
+    instructions: list[Instructions] = field(default_factory=list)
 
     def as_json(self) -> dict[str, Any]:
         """The resolved recipe, as `build --dry-run` prints it."""
@@ -103,6 +114,9 @@ class Recipe:
             ],
             "env": self.env,
             "entrypoint": self.entrypoint,
+            "instructions": [
+                {"recipe": i.owner, "text": i.text} for i in self.instructions
+            ],
         }
 
 
@@ -154,6 +168,9 @@ def read(path: Path) -> _File:
     recipe.sections = [section(s, where, path.parent) for s in sections]
     kits.unique([s.name for s in recipe.sections], where, "section")
     recipe.env = env_map(data.get("env"), where)
+    if "instructions" in data:
+        text_ = read_instructions(data["instructions"], where, path.parent)
+        recipe.instructions = [Instructions(owner=name, text=text_)]
     recipe.kits = [kit_entry(e, where, path, name) for e in data.get("kits", [])]
     kits.unique([u.kit.name for u in recipe.kits], where, "kit")
 
@@ -180,6 +197,29 @@ def read(path: Path) -> _File:
                 "adds; defining it again already replaces the inherited one",
             )
     return _File(name=name, path=path, inherits=inherits, remove=removals, recipe=recipe)
+
+
+def read_instructions(value: object, where: str, base: Path) -> str:
+    """A path relative to the recipe, or `{"text": ...}`. Never guessed between."""
+    if isinstance(value, str):
+        rel = path_value(value, where, "instructions", absolute=False)
+        target = base / rel
+        if target.is_symlink() or not target.resolve().is_relative_to(base.resolve()):
+            raise fail(where, f"instructions {rel!r} leaves {base}")
+        if not target.is_file():
+            raise fail(where, f"instructions {rel!r} is not a file in {base}")
+        body = target.read_text(encoding="utf-8")
+    elif (
+        isinstance(value, dict)
+        and set(value) == {"text"}
+        and isinstance(value["text"], str)
+    ):
+        body = value["text"]
+    else:
+        raise fail(where, 'instructions must be a path, or {"text": "..."}')
+    if not body.strip():
+        raise fail(where, "instructions must be non-empty")
+    return body
 
 
 def kit_entry(raw: object, where: str, path: Path, owner: str) -> KitUse:
@@ -210,6 +250,10 @@ def merge(into: Recipe, layer: Recipe) -> None:
     into.sections = replace_by_name(into.sections, layer.sections, lambda s: s.name)
     into.kits = replace_by_name(into.kits, layer.kits, lambda u: u.kit.name)
     into.env = {**into.env, **layer.env}
+    # Keyed by owner, so a recipe reached twice through inheritance counts once.
+    into.instructions = replace_by_name(
+        into.instructions, layer.instructions, lambda i: i.owner
+    )
 
 
 def replace_by_name(old: list[Any], new: list[Any], key: Any) -> list[Any]:
@@ -336,10 +380,21 @@ def host_arch(machine: str | None = None) -> str:
     }.get(machine, machine)
 
 
-def check(recipe: Recipe, agent: str, skills_dir: str | None, arch: str) -> None:
+def check(
+    recipe: Recipe,
+    agent: str,
+    skills_dir: str | None,
+    arch: str,
+    instructions_file: str | None = None,
+) -> None:
     """Refuse what would fail late: an agent a kit cannot serve, a missing build."""
     if recipe.agent != agent:
         raise AgentboxError(f"recipe {recipe.name} builds {recipe.agent}, not {agent}")
+    if recipe.instructions and not instructions_file:
+        raise AgentboxError(
+            f"recipe {recipe.name} has instructions, and sanduk does not know where "
+            f"{agent} reads them. They would be installed with nothing reading them"
+        )
     for use in recipe.kits:
         kits.check(use.kit, agent, skills_dir)
     owned = [(recipe.name, s) for s in recipe.sections] + [
@@ -350,7 +405,9 @@ def check(recipe: Recipe, agent: str, skills_dir: str | None, arch: str) -> None
             raise AgentboxError(f"{owner}: section {s.name} has no {arch} artifact")
 
 
-def render_recipe(recipe: Recipe, skills_dir: str | None) -> Rendered:
+def render_recipe(
+    recipe: Recipe, skills_dir: str | None, instructions_file: str | None = None
+) -> Rendered:
     """One Containerfile and the build-context files it copies."""
     ctx = Context()
     env = merged_env(recipe)
@@ -399,6 +456,9 @@ def render_recipe(recipe: Recipe, skills_dir: str | None) -> Rendered:
             if use.kit.skills:
                 block(kits.render_skills(use.kit, f"{home}/{skills_dir}", ctx))
 
+    if instructions_file and recipe.instructions:
+        block(render_instructions(recipe, f"{home}/{instructions_file}", ctx))
+
     block([f"USER {user}", env_instruction({"HOME": home, **env})])
     for use in recipe.kits:
         agent_steps = [
@@ -422,6 +482,23 @@ def render_recipe(recipe: Recipe, skills_dir: str | None) -> Rendered:
         ]
     )
     return Rendered(containerfile="\n".join(lines) + "\n", files=ctx.files)
+
+
+def render_instructions(recipe: Recipe, dest: str, ctx: Context) -> list[str]:
+    """The instructions as one read-only file at `dest`, in an agent-owned directory.
+
+    The directories are the agent's because the agent keeps its own state beside
+    the file, e.g. Claude Code under ~/.claude.
+    """
+    home = recipe.home
+    parents = dest[len(home) + 1 :].split("/")[:-1]
+    owned = [f"{home}/{'/'.join(parents[: i + 1])}" for i in range(len(parents))]
+    body = "\n\n".join(i.text.strip("\n") for i in recipe.instructions) + "\n"
+    rel = ctx.add(f"instructions/{recipe.name}/{dest.rsplit('/', 1)[1]}", body.encode())
+    lines = [f"# instructions from {', '.join(i.owner for i in recipe.instructions)}"]
+    if owned:
+        lines.append(f'RUN install -d -o "$AGENT_UID" -g "$AGENT_GID" {" ".join(owned)}')
+    return [*lines, f"COPY {rel} {dest}", f"RUN chmod a=r {dest}"]
 
 
 def merged_env(recipe: Recipe) -> dict[str, str]:

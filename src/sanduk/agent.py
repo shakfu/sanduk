@@ -131,6 +131,10 @@ class Agent(ABC):
     #: Where the agent reads user-global skills, relative to its home. None:
     #: not known, so a kit carrying skills is refused for it.
     skills_dir: str | None = None
+    #: Where the agent reads user-level instructions (CLAUDE.md, AGENTS.md),
+    #: relative to its home. None: not known, so a recipe's `instructions` are
+    #: refused for it.
+    instructions_file: str | None = None
     #: A handler without a recipe names a prebuilt image and the Containerfile
     #: that builds it instead. It takes no kits.
     image = ""

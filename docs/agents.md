@@ -1,6 +1,6 @@
 # Agent handlers
 
-sanduk runs one agent CLI inside the container and reads its JSON stream. What that CLI is, how it is driven, and how its output is parsed live in a handler. Eight ship: `claude`, `codex`, `hax`, `hermes`, `minima`, `opencode`, `pi` and `prime`. A ninth is a class you write, in your own package. `prime` is a subclass of `pi`: two builds of one CLI, where only the variable names, one flag and the image differ.
+sanduk runs one agent CLI inside the container and reads its JSON stream. What that CLI is, how it is driven, and how its output is parsed live in a handler. Eight ship: `claude`, `codex`, `hax`, `hermes`, `minima`, `opencode`, `pi` and `prime`. A ninth is a class you write, in your own package. `prime` is a subclass of `pi`: two builds of one CLI, where the variable names and how the key is referenced, one flag, the config and skills directories, and the image differ.
 
 ## What a handler answers
 
@@ -9,6 +9,7 @@ sanduk runs one agent CLI inside the container and reads its JSON stream. What t
 | `name` | the `--agent` value and the registry key |
 | `recipe` | the recipe that builds the image; see [docs/dev/kits.md](dev/kits.md) |
 | `skills_dir` | where the agent reads skills, relative to its home; `None` if unknown |
+| `instructions_file` | where the agent reads user-level instructions (`CLAUDE.md`, `AGENTS.md`), relative to its home; `None` if unknown, and a recipe's `instructions` are refused |
 | `image`, `containerfile` | instead of `recipe`: a prebuilt image and the Containerfile that builds it. Takes no kits |
 | `protocols` | wire protocols the agent speaks, from `sanduk.providers` |
 | `argv()` | flags appended after the image in the container command |

@@ -157,7 +157,7 @@ To change a single inherited section rather than drop it, redefine it under the 
 | `name` | yes | no | equals the file stem |
 | `description` | no | no | |
 | `inherits` | no | no | a name or a list of names |
-| `agent` | yes, after inheritance | yes | handler name; supplies `skills_dir` |
+| `agent` | yes, after inheritance | yes | handler name; supplies `skills_dir` and `instructions_file` |
 | `from` | yes, after inheritance | yes | base image |
 | `user`, `home` | yes, after inheritance | yes | the agent's account; created if `from` lacks it |
 | `sections` | no | merged | see below |
@@ -165,6 +165,7 @@ To change a single inherited section rather than drop it, redefine it under the 
 | `remove` | no | no | `kits`, `sections`, `env`: names to drop from what was inherited. `section_types`: section types to drop |
 | `env` | no | merged by key | `ENV` lines |
 | `entrypoint` | yes, after inheritance | yes | argv |
+| `instructions` | no | appended, parents first | standing instructions for the agent: a path relative to this file, or `{"text": "..."}`. Written read-only to the handler's `instructions_file`; see [Instruction files](#instruction-files) |
 
 Merge rules:
 
@@ -195,7 +196,7 @@ recipe claude-docs pins kit docs at 9b1c...e04a, but
 ~/.config/sanduk/kits/docs/kit.json is 51f7...a9c2
 ```
 
-The pin covers the whole kit only if `kit.json` pins everything else the kit uses. Downloads already carry `sha256`. Vendored skill files must too; see [Kit fields](#fields-1). A byte-level hash also fails on a whitespace-only edit. That is the price of a hash `sha256sum` can reproduce.
+The pin covers the whole kit only if `kit.json` pins everything else the kit uses. Downloads already carry `sha256`. Vendored skill files must too; see [Kit fields](#fields-1). Files a `copy` tool takes from the kit directory do not yet, so the pin does not cover them; see [TODO.md](../../TODO.md). A byte-level hash also fails on a whitespace-only edit. That is the price of a hash `sha256sum` can reproduce.
 
 Consequences:
 
@@ -311,6 +312,21 @@ Not shipped. `rtk init -g` may prompt; a non-interactive flag is UNCONFIRMED.
 
 A kit does not include other kits; recipes compose kits. A kit's identity is the SHA-256 of `kit.json`, so it has no version field; its tools carry their own. A file under a skill `path` that is missing from `files`, or whose hash differs, is refused. That keeps the recipe's pin transitive.
 
+## Instruction files
+
+A recipe's `instructions` land in the user-level file each agent reads on every run, beside any `AGENTS.md` or `CLAUDE.md` in the mounted repository. The handler's `instructions_file` records where. Paths were read from each agent's source at the pinned version, then checked by a sealed run whose instructions demanded a token the task never mentioned.
+
+| Agent | `instructions_file` (under `home`) | Source |
+|-|-|-|
+| claude | `.claude/CLAUDE.md`; skipped under `--bare`, which is refused beside instructions | [memory](https://code.claude.com/docs/en/memory) |
+| codex | `.codex/AGENTS.md`; `--ignore-user-config` does not skip it | [instructions/mod.rs](https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/codex-home/src/instructions/mod.rs#L9-L67) |
+| hax | `.config/hax/AGENTS.md` | [path.c](https://github.com/OleksandrChekhovskyi/hax/blob/v0.5.0/src/system/path.c#L117-L132) |
+| opencode | `.config/opencode/AGENTS.md`; shadows its `~/.claude/CLAUDE.md` fallback | [instruction.ts](https://github.com/anomalyco/opencode/blob/v1.18.29/packages/opencode/src/session/instruction.ts#L60-L63) |
+| pi | `.pi/agent/AGENTS.md`, in `PI_CODING_AGENT_DIR` | [resource-loader.ts](https://github.com/earendil-works/pi/blob/v0.85.1/packages/coding-agent/src/core/resource-loader.ts#L71-L90) |
+| prime | `.prime/agent/AGENTS.md`, in `PRIME_AGENT_CODING_AGENT_DIR` | [resource-loader.ts](https://github.com/PrimeIntellect-ai/prime-agent/blob/v0.9.5/packages/coding-agent/src/core/resource-loader.ts#L58-L88) |
+| hermes | not set: its global file, `~/.hermes/SOUL.md`, replaces the agent's identity rather than adding to it, and a threat scan blanks the whole file on a match | [prompt_builder.py](https://github.com/NousResearch/hermes-agent/blob/v2026.7.20/agent/prompt_builder.py#L1875-L1903) |
+| minima | `.config/minima/AGENTS.md`, from 0.3.0 | [CHANGELOG](https://github.com/shakfu/minima/blob/0.3.0/CHANGELOG.md) |
+
 ## Skill directories
 
 Every shipped agent discovers `SKILL.md` directories ([Agent Skills spec](https://agentskills.io/specification)). The handler's `skills_dir` records where.
@@ -323,7 +339,7 @@ Every shipped agent discovers `SKILL.md` directories ([Agent Skills spec](https:
 | pi | `.agents/skills` | [skills.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/skills.md) |
 | prime | not set: UNCONFIRMED, so kit skills are refused for prime | -- |
 | hax | `.agents/skills` | [usage.md](https://github.com/OleksandrChekhovskyi/hax/blob/main/docs/usage.md) |
-| minima | not set: minima reads no skills | -- |
+| minima | `.config/minima/skills`, from 0.3.0 | [CHANGELOG](https://github.com/shakfu/minima/blob/0.3.0/CHANGELOG.md) |
 | hermes | `.hermes/skills` | [skills.md](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/features/skills.md) |
 
 One skill text serves every agent: the same files go into each agent's `skills_dir`. Skill text therefore names shell commands, never an agent's tool names such as claude's `Bash`.

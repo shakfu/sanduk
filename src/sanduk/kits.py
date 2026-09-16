@@ -1,9 +1,10 @@
 """Kits: named bundles of tools and skills that recipes include.
 
 A kit is a directory holding `kit.json`. Its identity is the SHA-256 of that
-file's bytes, which a recipe pins. The pin covers the whole kit because
-`kit.json` in turn pins everything else: downloads by `sha256`, and every file
-of a vendored skill by its own hash, checked here when the kit is read.
+file's bytes, which a recipe pins. `kit.json` in turn pins downloads by
+`sha256`, and every file of a vendored skill by its own hash, checked here when
+the kit is read. A file a `copy` tool takes from the kit directory is not
+pinned; see TODO.md.
 
 One skill text serves every agent; the recipe's agent decides where it lands.
 See docs/dev/kits.md.

@@ -11,6 +11,7 @@ import os
 import pytest
 
 from sanduk import assistants, catalog, kits, recipes
+from sanduk.agents import BUILTIN
 from sanduk.cli import main, parse_args, resolve_image, select
 from sanduk.errors import AgentboxError
 from sanduk.providers import get_provider
@@ -365,6 +366,105 @@ def test_a_tool_with_no_build_for_this_architecture_is_refused(root):
         recipes.check(recipes.resolve("r"), "hax", ".agents/skills", "arm64")
 
 
+# --- instructions -----------------------------------------------------------
+
+
+def instructions_of(name, instructions_file=".agents/AGENTS.md"):
+    out = recipes.render_recipe(recipes.resolve(name), None, instructions_file)
+    texts = [v for k, v in out.files.items() if k.startswith("instructions/")]
+    return out.containerfile, (texts[0].decode() if texts else None)
+
+
+def test_instructions_from_a_path_relative_to_the_recipe(root):
+    (root / "recipes" / "house.md").write_text("# House rules\n\nWrite tests.\n")
+    write_recipe(root, "r", **BASE, instructions="house.md")
+    containerfile, text = instructions_of("r")
+    assert text == "# House rules\n\nWrite tests.\n"
+    assert f"{HOME}/.agents/AGENTS.md" in containerfile
+
+
+def test_instructions_inline_are_an_explicit_text_object(root):
+    write_recipe(root, "r", **BASE, instructions={"text": "Line one.\nLine two."})
+    assert instructions_of("r")[1] == "Line one.\nLine two.\n"
+
+
+@pytest.mark.parametrize(
+    ("value", "match"),
+    [
+        ("missing.md", "is not a file"),
+        ("../outside.md", "may not contain"),
+        ({"text": ""}, "non-empty"),
+        ({"text": "x", "extra": 1}, "a path, or"),
+        (["house.md"], "a path, or"),
+    ],
+)
+def test_malformed_instructions_are_refused(root, value, match):
+    write_recipe(root, "r", **BASE, instructions=value)
+    with pytest.raises(AgentboxError, match=match):
+        recipes.resolve("r")
+
+
+def test_a_child_appends_its_instructions_to_its_parents(root):
+    write_recipe(root, "base", **BASE, instructions={"text": "From base."})
+    write_recipe(root, "mid", inherits="base", instructions={"text": "From mid."})
+    write_recipe(root, "other", inherits="base")
+    # Two paths to `base`: its text must still appear once.
+    write_recipe(root, "r", inherits=["mid", "other"], instructions={"text": "From r."})
+    assert instructions_of("r")[1] == "From base.\n\nFrom mid.\n\nFrom r.\n"
+
+
+def test_a_recipe_without_instructions_writes_no_file(root):
+    write_recipe(root, "r", **BASE)
+    containerfile, text = instructions_of("r")
+    assert text is None
+    assert "AGENTS.md" not in containerfile
+
+
+def test_instructions_are_read_only_and_their_directories_are_the_agents(root):
+    write_recipe(root, "r", **BASE, instructions={"text": "x"})
+    containerfile, _ = instructions_of("r", ".config/tool/AGENTS.md")
+    assert (
+        f'install -d -o "$AGENT_UID" -g "$AGENT_GID" {HOME}/.config {HOME}/.config/tool'
+        in containerfile
+    )
+    assert f"chmod a=r {HOME}/.config/tool/AGENTS.md" in containerfile
+
+
+def test_changed_instructions_change_the_image_tag(root):
+    write_recipe(root, "r", **BASE, instructions={"text": "one"})
+    before = recipes.image_tag(
+        recipes.resolve("r"),
+        recipes.render_recipe(recipes.resolve("r"), None, "A.md"),
+        [],
+    )
+    write_recipe(root, "r", **BASE, instructions={"text": "two"})
+    after = recipes.image_tag(
+        recipes.resolve("r"),
+        recipes.render_recipe(recipes.resolve("r"), None, "A.md"),
+        [],
+    )
+    assert before != after
+
+
+def test_instructions_for_an_agent_with_no_known_file_are_refused(root):
+    write_recipe(root, "r", **BASE, instructions={"text": "x"})
+    with pytest.raises(AgentboxError, match="does not know where hax reads"):
+        recipes.check(recipes.resolve("r"), "hax", ".agents/skills", "arm64", None)
+
+
+@pytest.mark.parametrize("agent", BUILTIN, ids=lambda a: a.name)
+def test_each_shipped_agent_gets_its_instructions_or_refuses_them(root, agent):
+    write_recipe(root, "r", inherits=agent.recipe, instructions={"text": "x"})
+    recipe = recipes.resolve("r")
+    if agent.instructions_file is None:
+        with pytest.raises(AgentboxError, match="does not know where"):
+            recipes.check(recipe, agent.name, agent.skills_dir, "arm64", None)
+        return
+    recipes.check(recipe, agent.name, agent.skills_dir, "arm64", agent.instructions_file)
+    out = recipes.render_recipe(recipe, agent.skills_dir, agent.instructions_file)
+    assert f"{recipe.home}/{agent.instructions_file}" in out.containerfile
+
+
 # --- lookup -----------------------------------------------------------------
 
 
@@ -515,6 +615,18 @@ def test_a_kit_the_runs_flags_would_defeat_is_refused(
     write_kit(root, "k", **kit)
     with pytest.raises(AgentboxError, match=match):
         select(flags("--agent", "claude", "--kit", "k", *argv))
+
+
+def test_instructions_are_refused_with_bare(root, monkeypatch):
+    """--bare skips the instruction file, so the run would silently lack them."""
+    from sanduk.agents.claude import ClaudeCode
+
+    monkeypatch.setattr(ClaudeCode, "instructions_file", ".claude/CLAUDE.md")
+    monkeypatch.setenv(get_provider("anthropic").key_env, "sk-test")
+    write_recipe(root, "r", inherits="claude", instructions={"text": "x"})
+    select(flags("--recipe", "r"))
+    with pytest.raises(AgentboxError, match="--bare stops the agent"):
+        select(flags("--recipe", "r", "--bare"))
 
 
 def test_build_dry_run_prints_the_recipe_and_containerfile(capsys):

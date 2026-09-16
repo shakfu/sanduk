@@ -144,6 +144,8 @@ class Pi(Agent):
     name = "pi"
     recipe = "pi"
     skills_dir: str | None = ".agents/skills"
+    # In PI_CODING_AGENT_DIR, which the recipe sets to ~/.pi/agent.
+    instructions_file: str | None = ".pi/agent/AGENTS.md"
     protocols = frozenset({ANTHROPIC_MESSAGES, OPENAI_CHAT, OPENAI_RESPONSES})
     # Attributes rather than constants: prime-agent is this CLI in another
     # build, and the variable names are all that differ.

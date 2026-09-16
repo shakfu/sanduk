@@ -6,6 +6,8 @@ Ordered by how much they would change a decision, not by effort.
 
 ### Correctness
 
+- [ ] **A kit's `copy` files are not pinned.** `kit.json` pins downloads and skill files by hash, but a file a `copy` tool takes from the kit directory is read unchecked. Editing one changes the image tag and nothing refuses the build, so a catalogue update can change what runs in an image without a recipe edit, which is what the pin exists to prevent. Measured with an illustrative kit: an edited copied script built without complaint. The fix is a required `sha256` beside `from`, checked when the kit is read, as skill files are. Recipes' own `copy` sections come from the recipe's directory and are not pinned either; decide whether they should be.
+
 - [ ] **`--log-dir` is not checked against being inside the bind mount.** The default `./sanduk-logs` lands in `/work` under `-w .`, which hands the agent its own audit trail, and `--help` claims the opposite unconditionally. Body files are created with an ordinary `open(..., "wb")`, so a predictable future log name can also be pointed at a host path through a symlink. Resolve the directory against the workspace and every read-write `--mount`, and create entries `O_EXCL|O_NOFOLLOW`.
 
 ## High
@@ -31,6 +33,22 @@ Ordered by how much they would change a decision, not by effort.
 
 - [ ] **Nothing checks that a network is actually internal.** `ensure_network` accepts any existing network with a gateway and subnet, and neither runtime's `network_info` returns the `internal` flag. A routable network left by a `key-safe` run is reused by a `sealed` run through the same `--proxy-network` name, and the CLI then prints "no route off the host" having checked nothing. Operator-triggered rather than agent-triggered, which is why it sits below the rest; the false assertion is the defect. Verifying a fix needs a real engine, so it lands in CI rather than `make test`.
 
+### Performance
+
+- [ ] **prime-agent's built-in Python skills are not in the image.** Before the `UV_OFFLINE=1` default, installing them cost ~6 minutes per `sealed` run while uv waited out its network retries. Measured on 0.9.5, same image, model and task:
+
+  | Run | Wall time |
+  |-|-|
+  | `sealed` | 399s |
+  | `key-safe` | 27.2s |
+  | `sealed` with `UV_OFFLINE=1` | 8.6s |
+
+  Cause, from 0.9.5's `dist/core/kernel/bootstrap.js`: kernel readiness compares `.bootstrap-version` against the Python skills the session passes in. `--prime-agent-bootstrap` calls `ensureKernelPython()` with no skills, so the image records `"pythonSkills": []`. The archive ships 11 skills with a `pyproject.toml` (`edit`, `compact`, `goal`, `refine`, `websearch` and others). Every fresh container therefore runs `syncPythonSkills` when the kernel starts: one `uv pip install` per skill. That it happens once per run rather than per call is inferred, not timed. `PI_OFFLINE=1` does not reach uv. The destination is uv's default index, which is inferred from the code and not captured. Offline, each install fails after the wait, so those skills were already unavailable in `sealed` runs (inferred from the warning path; the run's stderr showed nothing).
+
+  Mitigated: `sanduk-prime` defaults `UV_OFFLINE=1`, and the prime case in `make test-agents` went from 417-440s to 8.4s. Open: `key-safe` and `open` runs no longer install the skills unless run with `-e UV_OFFLINE=0`. The fix is installing them at build time, which no CLI does today.
+
+  For upstream: `--prime-agent-bootstrap` could install the built-in Python skills, and offline mode could imply `UV_OFFLINE`.
+
 ## Medium
 
 ### Untested
@@ -45,7 +63,7 @@ Ordered by how much they would change a decision, not by effort.
 
 - [ ] **Where prime reads skills.** Its handler has no `skills_dir`, so kits with skills are refused for it. pi reads `~/.agents/skills`; whether PrimeIntellect's build does is not measured.
 
-- [ ] **A long run.** Everything measured so far finishes in ~35s. No real agent has hit `--timeout`, exhausted `--max-turns`, or run long enough to trigger context compaction.
+- [ ] **A long run.** Most runs measured so far finish in ~35s. No agent has exhausted `--max-turns` or run long enough to trigger context compaction.
 
 ### Correctness
 
@@ -77,7 +95,7 @@ Ordered by how much they would change a decision, not by effort.
 
 ### Design
 
-- [ ] **`--effort`, `--bare` and `--permission-mode` are Claude Code's flags on the shared parser.** claude and hax read some of them, minima refuses them, and the other five ignore them. A `--` passthrough is the cheaper shape.
+- [ ] **`--effort`, `--bare` and `--permission-mode` are Claude Code's flags on the shared parser.** claude reads all three; hax reads `--effort` and `--bare` and refuses `--permission-mode`; minima refuses `--effort` and `--permission-mode` and ignores `--bare`; the other five ignore them. `--bare` is also refused beside a recipe's `instructions`. A `--` passthrough is the cheaper shape.
 
 - [ ] **The placeholder container costs a VM boot and 256MB** for the duration of every relayed run (`key-safe`, `sealed`) on Apple's `container`, purely so the bridge exists before the relay binds. Worth checking whether a shorter-lived container or a retrying bind would do.
 

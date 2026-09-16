@@ -857,15 +857,22 @@ def resolve_image(args: argparse.Namespace) -> tuple[Agent, Image]:
             tag=args.image or agent.image, containerfile=agent.containerfile
         )
 
-    recipes.check(recipe, agent.name, agent.skills_dir, recipes.host_arch())
-    rendered = recipes.render_recipe(recipe, agent.skills_dir)
+    recipes.check(
+        recipe, agent.name, agent.skills_dir, recipes.host_arch(), agent.instructions_file
+    )
+    rendered = recipes.render_recipe(recipe, agent.skills_dir, agent.instructions_file)
     build_args = get_runtime(getattr(args, "runtime", None)).build_args()
     tag = args.image or recipes.image_tag(recipe, rendered, build_args)
     return agent, Image(tag=tag, recipe=recipe, rendered=rendered)
 
 
 def check_kits(args: argparse.Namespace, recipe: recipes.Recipe) -> None:
-    """Refuse a kit the run's own flags would defeat or break."""
+    """Refuse a kit, or instructions, the run's own flags would defeat or break."""
+    if recipe.instructions and getattr(args, "bare", False):
+        raise AgentboxError(
+            f"recipe {recipe.name} has instructions, and --bare stops the agent "
+            "reading them"
+        )
     for use in recipe.kits:
         kit = use.kit
         if kit.egress and not getattr(args, "egress", True):

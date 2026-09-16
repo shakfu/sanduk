@@ -73,6 +73,9 @@ class MinimaReader(Reader):
 class Minima(Agent):
     name = "minima"
     recipe = "minima"
+    # $XDG_CONFIG_HOME/minima, which is ~/.config/minima in the image. Both from 0.3.0.
+    skills_dir = ".config/minima/skills"
+    instructions_file = ".config/minima/AGENTS.md"
     protocols = frozenset({ANTHROPIC_MESSAGES, OPENAI_CHAT, OPENAI_RESPONSES})
 
     def check(self, args: argparse.Namespace, provider: Provider) -> None:

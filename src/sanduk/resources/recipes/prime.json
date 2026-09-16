@@ -1,31 +1,33 @@
 {
   "name": "prime",
-  "description": "prime-agent, pi's CLI in PrimeIntellect's build, from a checksummed release tarball",
+  "description": "prime-agent's standalone binary on debian:trixie-slim, with its Python kernel prepared at build time",
   "agent": "prime",
-  "from": "docker.io/library/node:22-slim",
-  "user": "node",
-  "home": "/home/node",
+  "from": "docker.io/library/debian:trixie-slim",
+  "user": "agent",
+  "home": "/home/agent",
   "sections": [
     {
       "name": "base-tools",
       "type": "apt",
-      "install": ["git", "ripgrep", "ca-certificates", "curl", "jq", "python3"]
+      "description": "fd-find and ripgrep are the fd and rg prime-agent would otherwise download unpinned",
+      "install": ["git", "ripgrep", "fd-find", "ca-certificates", "curl", "jq", "python3"]
     },
     {
       "name": "agent",
-      "type": "run",
-      "description": "the install also builds the Python kernel, prime-agent's only tool",
-      "lines": [
-        "release=https://pub-728493de92a943e2a9b2d17b4719f318.r2.dev/releases/v0.9.4",
-        "tarball=prime-agent-0.9.4.tgz",
-        "cd /tmp",
-        "curl -fsSL -o \"$tarball\" \"$release/$tarball\"",
-        "echo \"b8d752a53d11a8c9a7580e1fb5fc24f7ce74ccad979c7e6e6aa8880fc3ad90b0  $tarball\" | sha256sum -c -",
-        "HOME=/home/node PRIME_AGENT_CODING_AGENT_DIR=/home/node/.prime/agent PRIME_AGENT_INSTALL_UV=1 PRIME_AGENT_BOOTSTRAP_KERNEL_ON_INSTALL=1 PRIME_AGENT_BOOTSTRAP_TOOLS_ON_INSTALL=1 npm install -g \"/tmp/$tarball\"",
-        "rm -f \"/tmp/$tarball\"",
-        "npm cache clean --force",
-        "chown -R node:node /home/node"
-      ]
+      "type": "archive",
+      "description": "the archive stays whole: prime-agent finds its assets and Python runtime beside the executable. x64 is the baseline build, for CPUs without AVX2",
+      "artifacts": {
+        "amd64": {
+          "url": "https://github.com/PrimeIntellect-ai/prime-agent/releases/download/v0.9.5/prime-agent-0.9.5-linux-x64-baseline.tar.gz",
+          "sha256": "7888fd9735b97a6c9865738467b00f67ecba72e9e597f1de2480fb584e74a2b0"
+        },
+        "arm64": {
+          "url": "https://github.com/PrimeIntellect-ai/prime-agent/releases/download/v0.9.5/prime-agent-0.9.5-linux-arm64.tar.gz",
+          "sha256": "81303f98f31aed99aa641a66ccb87629940de1e45dd86d56ede1d88fd521971c"
+        }
+      },
+      "dest": "/opt/prime-agent",
+      "links": {"/usr/local/bin/prime-agent": "prime-agent"}
     },
     {
       "name": "entrypoint",
@@ -33,14 +35,20 @@
       "from": "files/sanduk-prime",
       "to": "/usr/local/bin/sanduk-prime",
       "mode": "0755"
+    },
+    {
+      "name": "kernel",
+      "type": "run",
+      "user": "agent",
+      "description": "the archive has no virtual environment, and a sealed run cannot fetch one: uv and Python are installed here",
+      "lines": ["PRIME_AGENT_INSTALL_UV=1 prime-agent --prime-agent-bootstrap"]
     }
   ],
   "env": {
-    "PATH": "/home/node/.local/bin:$PATH",
-    "PRIME_AGENT_CODING_AGENT_DIR": "/home/node/.prime/agent",
+    "PATH": "/home/agent/.local/bin:$PATH",
+    "PRIME_AGENT_CODING_AGENT_DIR": "/home/agent/.prime/agent",
     "PI_OFFLINE": "1",
-    "PI_SKIP_VERSION_CHECK": "1",
-    "PI_TELEMETRY": "0"
+    "PI_SKIP_VERSION_CHECK": "1"
   },
   "entrypoint": ["sanduk-prime"]
 }

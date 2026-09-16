@@ -28,7 +28,7 @@ endif
 
 .DEFAULT_GOAL := help
 .PHONY: help sync build wheel sdist dist check publish-test publish upgrade \
-        release test test-container test-all coverage coverage-html \
+        release test test-container test-live test-agents test-all coverage coverage-html \
         lint lint-check format format-check typecheck qa docs \
         image image-rebuild run run-proxy shell ps logs \
         stop clean distclean destroy system-start system-stop system-status

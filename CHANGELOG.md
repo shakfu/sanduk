@@ -2,34 +2,46 @@
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.3.0]
 
 ### Added
 
-- `--agent minima` runs [minima](https://github.com/shakfu/minima), a static Rust agent, against every provider. It needs minima 0.2.2, the first release with prebuilt Linux binaries; `--json` arrived in 0.2.1. The recipe installs a checksummed release tarball rather than building from crates.io, which would put a Rust toolchain and several minutes of compilation into every image build.
+- Kits and recipes. A recipe is a JSON description of an agent image, rendered to one Containerfile; each agent's image now comes from a shipped recipe, and the seven hand-written Containerfiles are gone. A kit is a bundle of pinned tools and one skill text shared by every agent. `docs` ships with d2 and officecli, and `claude-docs` is claude with it.
 
-- `make test-agents` runs each shipped agent once against a real model, through its own image and, except for hermes, the sealed relay. The task is to hash a random nonce with `python3`, so the digest in `REPORT.md` shows that code ran in the container; a model cannot produce it otherwise. Runs spend money, so the suite skips unless `AGENT_LIVE=1` and caps OpenRouter runs with `--budget`.
+  ```text
+  sanduk run 'Draw the module graph.' --agent claude --provider anthropic --kit docs
+  sanduk run 'Draw the module graph.' --recipe claude-docs --provider anthropic
+  sanduk build --recipe claude-docs --dry-run
+  sanduk list recipes | list kits
+  ```
+
+  A recipe pins each kit by the SHA-256 of its `kit.json`, and `kit.json` pins every download and skill file, so a changed download or skill stops the build rather than changing the image unseen. Files a kit's `copy` tools take from its own directory are not pinned yet. Recipes inherit by name, unpinned, with parent sections first, since a child step may need a parent's packages; start-vm, where the model comes from, runs the child's first. Images are tagged `sanduk-<recipe>:<hash>` over everything the build reads, so an old `sanduk:latest` or `sanduk-<agent>:latest` is no longer used or deleted by `destroy`: remove it with `container image delete` or `docker rmi`. Porting pinned three installs that were not: Claude Code, opencode's two provider drivers, and hax's tarball, which had no checksum. `assistant.toml` takes `recipe`, and `sanduk list agents` shows each agent's recipe where it showed an image. See [docs/dev/kits.md](docs/dev/kits.md).
+
+- `--agent minima` runs [minima](https://github.com/shakfu/minima), a static Rust agent, against every provider. The image installs minima 0.3.0, the first release that reads `~/.config/minima/AGENTS.md` and skills, so recipe `instructions` and kit skills work with it. `--json` arrived in 0.2.1 and prebuilt Linux binaries in 0.2.2. The recipe installs a checksummed release tarball rather than building from crates.io, which would put a Rust toolchain and several minutes of compilation into every image build.
+
+- `make test-agents` runs each shipped agent once against a real model, through its own image and, except for hermes, the sealed relay. The task is to hash a random nonce with `python3`, so the digest in `REPORT.md` shows that code ran in the container; a model cannot produce it otherwise. Runs spend money, so the suite skips unless `AGENT_LIVE=1` and caps OpenRouter runs with `--budget`, except hermes, which runs `open`.
+
+- Recipes take `instructions`: a path relative to the recipe, or `{"text": "..."}`. The build writes them read-only to the agent's user-level instruction file, such as `~/.claude/CLAUDE.md` or `~/.codex/AGENTS.md`, so every run reads them. A child appends to its parents' instructions rather than replacing them, since a recipe that layers on another usually adds rules. A string is always a path: guessing between text and a file name fails silently either way. hermes refuses them: its global file replaces its identity rather than adding to it. See [docs/dev/kits.md](docs/dev/kits.md#instruction-files).
 
 - `-r` is short for `--recipe` in `run`, `build`, `shell` and `destroy`.
 
 - `sanduk run -b` is short for `--rebuild`. A run already builds a missing image or a changed recipe; `-b` forces a rebuild of an image that exists.
 
+### Changed
+
+- prime-agent is 0.9.5, installed from its standalone Linux binary on `debian:trixie-slim` instead of the npm tarball on `node:22-slim`. The tarball's checksum covered only itself: its three `@earendil-works/pi-*` dependencies were fetched by URL with no hash, and `fd` was downloaded from GitHub at install. The binary archive is pinned per architecture, `fd` and `rg` come from Debian packages, and the Python kernel is still prepared at build time, since the archive carries no virtual environment. x64 uses the baseline build, which runs without AVX2.
+
+- The defaults are now `--provider openai`, `--agent codex` and, for `openai` only, `--model gpt-5.6-luna`. `claude` speaks Anthropic Messages only, so it could not stay the default agent against `openai`; codex speaks Responses, OpenAI's native protocol. The model default is per provider because a GPT id sent to Anthropic or OpenRouter fails upstream. `assistant.toml` and `make` follow the same defaults. Claude Code users now pass `--agent claude --provider anthropic`.
+
+- `--runtime` defaults to the first engine on PATH for the platform: `apple` then `docker` on macOS, `docker` elsewhere. The fixed `apple` default failed every Linux run that omitted the flag. Only macOS tries `apple`, because a `container` binary elsewhere is a different program. Detection checks PATH, not whether the engine's service is up. A stopped `container` service reports its own error instead of moving runs to Docker's image and container store. `make` passes `--runtime` only when `RUNTIME` is set. `sanduk list runtimes` marks the engine a run would pick.
+
 ### Removed
 
 - `scripts/sanduk.py`, the pre-package standalone script. It supported only Claude Code, Anthropic and Apple `container`, and every relay test ran twice to keep its copy of the relay in step.
 
-- Kits and recipes. A recipe is a JSON description of an agent image, rendered to one Containerfile; each agent's image now comes from a shipped recipe, and the seven hand-written Containerfiles are gone. A kit is a bundle of pinned tools and one skill text shared by every agent. `docs` ships with d2 and officecli, and `claude-docs` is claude with it.
-
-  ```text
-  sanduk run 'Draw the module graph.' --agent claude --kit docs
-  sanduk run 'Draw the module graph.' --recipe claude-docs
-  sanduk build --recipe claude-docs --dry-run
-  sanduk list recipes | list kits
-  ```
-
-  A recipe pins each kit by the SHA-256 of its `kit.json`, and `kit.json` pins every download and skill file, so a changed kit stops the build rather than changing the image unseen. Recipes inherit by name, unpinned, with parent sections first, since a child step may need a parent's packages; start-vm, where the model comes from, runs the child's first. Images are tagged `sanduk-<recipe>:<hash>` over everything the build reads, so an old `sanduk:latest` or `sanduk-<agent>:latest` is no longer used or deleted by `destroy`: remove it with `container image delete` or `docker rmi`. Porting pinned three installs that were not: Claude Code, opencode's two provider drivers, and hax's tarball, which had no checksum. `assistant.toml` takes `recipe`, and `sanduk list agents` shows each agent's recipe where it showed an image. See [docs/dev/kits.md](docs/dev/kits.md).
-
 ### Fixed
+
+- A `sealed` prime run no longer spends about 6 minutes in its first `ipython` call. prime-agent installs its built-in Python skills with uv when the kernel starts, because the build-time bootstrap records none, and with no route to the index uv retried until it gave up. The entrypoint now defaults `UV_OFFLINE=1`, so the install fails at once: the prime case in `make test-agents` went from 417-440s to 8.4s. Offline, those installs could not succeed anyway. `-e UV_OFFLINE=0` restores the install in `key-safe` or `open`.
 
 - A client that closes a keep-alive connection with a reset no longer prints a `ConnectionResetError` traceback per call. codex and minima both did it after most streamed responses, so a run printed a traceback on most turns. The call was already relayed and counted.
 
@@ -38,14 +50,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A streamed `/v1/responses` call through the relay no longer fails with `400 Unknown parameter: 'stream_options.include_usage'`. The relay added the field on every protocol route of a provider that needs it, but it belongs to Chat Completions. Every `--agent codex --provider openai` run in a relayed mode failed on its first call. A streamed Responses reply also logged `usage=?`: its counts are in `response.completed` under `response.usage`, which the usage reader did not look in. `make test-live` now runs a streamed Responses call through the relay, against OpenAI with `OPENAI_MODEL` set and against llama-server with `LLAMA_SERVER`.
 
 - The Docker "daemon is not reachable" error names the fix. It read `docker info`'s exit status alone, so a permission-denied socket, a remote `DOCKER_HOST` and a stopped local daemon all said "Start it". It now names the endpoint and one of: `sudo systemctl start docker`, `systemctl --user start docker` for a rootless socket, `sudo service docker start`, Docker Desktop or Colima on macOS, joining the `docker` group, or checking the remote host.
-
-### Changed
-
-- The defaults are now `--provider openai`, `--agent codex` and, for `openai` only, `--model gpt-5.6-luna`. `claude` speaks Anthropic Messages only, so it could not stay the default agent against `openai`; codex speaks Responses, OpenAI's native protocol. The model default is per provider because a GPT id sent to Anthropic or OpenRouter fails upstream. `assistant.toml` and `make` follow the same defaults. Claude Code users now pass `--agent claude --provider anthropic`.
-
-- `--runtime` defaults to the first engine on PATH for the platform: `apple` then `docker` on macOS, `docker` elsewhere. The fixed `apple` default failed every Linux run that omitted the flag. Only macOS tries `apple`, because a `container` binary elsewhere is a different program. Detection checks PATH, not whether the engine's service is up. A stopped `container` service reports its own error instead of moving runs to Docker's image and container store. `make` passes `--runtime` only when `RUNTIME` is set. `sanduk list runtimes` marks the engine a run would pick.
-
-### Fixed
 
 - Under `--runtime docker` on Linux, the agent can write a workdir owned by a user other than uid 1000. Every image ran its agent as uid 1000, and a native daemon keeps host ownership on a bind mount, so the agent could not write `REPORT.md` into a uid-1001 directory. GitHub's runner is one such case; the mount test has failed in CI since 0.2.4. `sanduk build --runtime docker` now builds the agent user with the caller's uid and gid. `--user` at run time was the alternative, but it leaves `$HOME` owned by 1000, where the images keep their config. A root caller keeps uid 1000. See [docs/dev/podman.md](docs/dev/podman.md).
 

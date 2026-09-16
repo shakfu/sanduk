@@ -1,6 +1,6 @@
 {
   "name": "hax",
-  "description": "hax, a static musl binary, on debian:trixie-slim with no language runtime",
+  "description": "hax, a static musl binary, on debian:trixie-slim with no Node",
   "agent": "hax",
   "from": "docker.io/library/debian:trixie-slim",
   "user": "agent",

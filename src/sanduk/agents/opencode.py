@@ -101,6 +101,8 @@ class OpenCode(Agent):
     name = "opencode"
     recipe = "opencode"
     skills_dir = ".agents/skills"
+    # Global rules; shadows the ~/.claude/CLAUDE.md fallback opencode also reads.
+    instructions_file = ".config/opencode/AGENTS.md"
     protocols = frozenset({ANTHROPIC_MESSAGES, OPENAI_CHAT})
 
     def check(self, args: argparse.Namespace, provider: Provider) -> None:

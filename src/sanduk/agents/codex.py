@@ -84,6 +84,8 @@ class Codex(Agent):
     name = "codex"
     recipe = "codex"
     skills_dir = ".agents/skills"
+    # $CODEX_HOME/AGENTS.md. --ignore-user-config drops config.toml, not this file.
+    instructions_file = ".codex/AGENTS.md"
     protocols = frozenset({OPENAI_RESPONSES})
 
     def wire(

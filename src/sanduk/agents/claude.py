@@ -62,6 +62,8 @@ class ClaudeCode(Agent):
     name = "claude"
     recipe = "claude"
     skills_dir = ".claude/skills"
+    # Skipped under --bare, which check_kits refuses beside instructions.
+    instructions_file = ".claude/CLAUDE.md"
     protocols = frozenset({ANTHROPIC_MESSAGES})
 
     def argv(

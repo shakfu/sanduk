@@ -37,17 +37,15 @@ Ordered by how much they would change a decision, not by effort.
 
 ### Untested
 
-- [ ] Add support for other solutions:
-
-    - docker sbx
-
-    - nvidia openshell
+- [ ] **Other sandboxes: decide or prune.** Both candidates were investigated and declined: docker sbx adds a boundary only on Linux ([docs/dev/sbx.md](docs/dev/sbx.md)), and NVIDIA OpenShell duplicates the relay's credential boundary or replaces it, costing `--allow-model`, `--max-tokens-cap`, `--budget` and `--log-bodies` ([docs/dev/openshell.md](docs/dev/openshell.md)). Nothing is open unless a new candidate appears; delete this entry otherwise.
 
 - [ ] **Kata Containers under `--oci-runtime`.** A VM per container on Linux, where Docker otherwise shares the host kernel. Measure `sealed` mode (the relay on the host gateway), `/work` under Cloud Hypervisor or QEMU, and Firecracker's lack of filesystem sharing. Needs KVM; standard GitHub runners may not expose it. See [docs/dev/microvms.md](docs/dev/microvms.md).
 
 - [ ] **Recipes under Docker and on amd64.** Every recipe was built and run on Apple's `container` 1.2.0, arm64 only. The uid build args, the amd64 artifacts and `docker image ls` in `destroy` are unexercised. The scheduled `images` CI job covers the agents; nothing builds `claude-docs`.
 
 - [ ] **An agent task that uses a kit.** d2 and officecli ran inside `claude-docs`, but no agent has been given a task that needs them, in `sealed` or otherwise. Also measure what installed skills cost: one task with and without `--kit docs`, comparing the relay log's per-call `in=` counts.
+
+- [ ] **docker-agent as a kit and recipe target.** Its `toolsets` list is declarative and closed, so a recipe can pin the whole tool surface: a kit installing an stdio MCP server, a recipe pinning it, a config naming it. No other agent allows that; the rest fix their tools in the binary. `--exec --json` and `base_url: ${OPENAI_BASE_URL}` both hold against a stub, and the call is `POST /v1/chat/completions`, already on the relay's route table. Three measurements gate an eighth agent slot: whether `selfupdate` or `toolinstall` fires before the first completion, which decides `sealed`; the layer cost of a 126 MiB binary; and the Anthropic endpoint end to end. See [docs/dev/docker-agent.md](docs/dev/docker-agent.md).
 
 - [ ] **Where prime reads skills.** Its handler has no `skills_dir`, so kits with skills are refused for it. pi reads `~/.agents/skills`; whether PrimeIntellect's build does is not measured.
 
@@ -78,6 +76,8 @@ Ordered by how much they would change a decision, not by effort.
 - [ ] **Recipe builds accumulate.** Each edit to a recipe or kit builds a new `sanduk-<recipe>:<hash>` image, and nothing deletes the old ones until `sanduk destroy`, which deletes them all. Deleting superseded tags after a build is the obvious fix; an older tag may belong to a run still in flight.
 
 - [ ] **Kits waiting to ship.** `rtk` and `snip` wait for the compressor trial above. `quarto` needs a decision: offline Typst PDF only, or a larger kit with TinyTeX preinstalled, since LaTeX PDF fetches packages at run time. See [docs/dev/kits.md](docs/dev/kits.md).
+
+- [ ] **Whether `key-safe` still has a use case.** It exists for `npm install`, `pip install` and `git clone` during a run; recipes now put dependencies in the image, where a `sealed` run fetches nothing. Census what is left: the kits declaring `egress`, which `check_kits` already refuses under `sealed`, and whether a real task needs the network during the run rather than at build. If little remains, `key-safe` is a compatibility mode to document rather than harden, and OpenShell's TLS-terminating egress policy never earns its cost ([docs/dev/openshell.md](docs/dev/openshell.md)). Independent of the outcome: the README table says `key-safe` leaves egress unrestricted and unlogged, and the run says nothing.
 
 ## Low
 

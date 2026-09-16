@@ -1,6 +1,6 @@
 # Agent handlers
 
-sanduk runs one agent CLI inside the container and reads its JSON stream. What that CLI is, how it is driven, and how its output is parsed live in a handler. Seven ship: `claude`, `codex`, `hax`, `hermes`, `opencode`, `pi` and `prime`. An eighth is a class you write, in your own package. `prime` is a subclass of `pi`: two builds of one CLI, where only the variable names, one flag and the image differ.
+sanduk runs one agent CLI inside the container and reads its JSON stream. What that CLI is, how it is driven, and how its output is parsed live in a handler. Eight ship: `claude`, `codex`, `hax`, `hermes`, `minima`, `opencode`, `pi` and `prime`. A ninth is a class you write, in your own package. `prime` is a subclass of `pi`: two builds of one CLI, where only the variable names, one flag and the image differ.
 
 ## What a handler answers
 

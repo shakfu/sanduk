@@ -4,7 +4,7 @@
 
 sanduk is a Python CLI tool and package that makes it easy to run an agent inside a disposable container. The agent does its work, writes a report to a bind-mounted directory, and when it’s finished, the container is deleted.
 
-Seven agents are available:
+Eight agents are available:
 
 - [claude code](https://claude.com/product/claude-code)
 
@@ -13,6 +13,8 @@ Seven agents are available:
 - [hax](https://github.com/OleksandrChekhovskyi/hax)
 
 - [hermes](https://github.com/NousResearch/hermes-agent)
+
+- [minima](https://github.com/shakfu/minima)
 
 - [opencode](https://github.com/sst/opencode)
 
@@ -46,7 +48,7 @@ In its stronger mode the container has no route off the host and never holds the
 
 Apple's `container` runs **Linux** containers as lightweight VMs. There is no such thing as a macOS container here; anything needing Xcode or the macOS toolchain cannot be the workload.
 
-Each agent has its own image. Claude Code, codex, opencode, pi and prime-agent run on `node:22-slim`; hermes is a Python package, so its image is `python:3.12-slim`; hax's is `debian:trixie-slim` with no language runtime, since the binary is static. All add `git`, `ripgrep`, `curl`, `jq`, and `python3`. The agent can only run what is in it. Without an interpreter it falls back to hand-tracing and still writes a confident report, so check whether the findings say they were reproduced. There is no C, Go, or Rust toolchain: add it with a [kit or recipe](#kits-and-recipes), point `--image` at your own image, or `--containerfile` at one to build.
+Each agent has its own image. Claude Code, codex, opencode, pi and prime-agent run on `node:22-slim`; hermes is a Python package, so its image is `python:3.12-slim`; hax's and minima's are `debian:trixie-slim` with no language runtime, since both binaries are static. All add `git`, `ripgrep`, `curl`, `jq`, and `python3`. The agent can only run what is in it. Without an interpreter it falls back to hand-tracing and still writes a confident report, so check whether the findings say they were reproduced. There is no C, Go, or Rust toolchain: add it with a [kit or recipe](#kits-and-recipes), point `--image` at your own image, or `--containerfile` at one to build.
 
 ## Install
 
@@ -167,6 +169,7 @@ The relay only forwards. It does not translate between protocols, so the agent h
 --agent codex      codex         openai, openai-compat  (default)
 --agent hax        hax           every provider
 --agent hermes     hermes-agent  openai-chat providers, --mode open only
+--agent minima     minima        every provider
 --agent opencode   opencode      every provider
 --agent pi         pi            every provider
 --agent prime      prime-agent   every provider
@@ -180,6 +183,8 @@ sanduk run 'Review this.' -w ./repo --mode sealed --agent hax \
 ```
 
 hax is a static C binary with no approval gate, which suits a container that is already the boundary. The image carries no language runtime. `--allowed-tools` and `--permission-mode` are Claude Code flags and are refused rather than dropped.
+
+minima is a static Rust binary, also without an approval gate. sanduk runs it with `-p --json`, which needs minima 0.2.1 or later; the image installs 0.2.2. Its `--provider` fixes the wire format, so sanduk names the minima provider that matches and moves the endpoint with `MINIMA_BASE_URL`. `--model` is required: a fresh container has no remembered model. `--effort` is refused along with the two Claude Code flags. minima reads no skills, so kits carrying skills are refused for it.
 
 codex accepts only `wire_api = "responses"`, so it pairs with `openai` or with an `openai-compat` server that answers `/v1/responses`. It has no base-URL variable: sanduk passes the endpoint as a `-c model_providers...` override, which is why `argv` is handed the run's wiring. Its own sandbox is disabled with `--sandbox danger-full-access`, since the container is the boundary and codex's sandbox would only stop the work; `--skip-git-repo-check` is passed because the bind mount is usually not a repository.
 
@@ -334,12 +339,12 @@ src/sanduk/
     runs.py        which process owns which container; the orphan sweep
     assistants.py  identity, schedule, mailbox: the assistant commands
     agents/        the shipped handlers: claude.py, codex.py, hax.py,
-                   hermes.py, opencode.py, pi.py, prime.py
+                   hermes.py, minima.py, opencode.py, pi.py, prime.py
     proxy.py       the host-side relay
     preflight.py   key validation, macOS firewall check
     resources/
         recipes/   claude.json, codex.json, hax.json, hermes.json,
-                   opencode.json, pi.json, prime.json, claude-docs.json
+                   minima.json, opencode.json, pi.json, prime.json, claude-docs.json
         kits/      docs/
 ```
 
@@ -384,8 +389,6 @@ make system-start / system-stop / system-status
 
 The fast suite makes no API calls and needs no key: the relay is exercised against a local fake upstream, and the preflight is monkeypatched.
 
-`scripts/sanduk.py` carries its own copy of the relay, so every relay test runs twice, once against each copy. That compares behaviour rather than source, which an AST comparison could no longer do once the package's relay grew providers the script does not have.
-
 The integration suite boots real VMs and proves the relay by the 401 an invalid key earns from the real endpoint, which is itself proof the request arrived.
 
 `make test-live` talks to real providers, and most of it costs nothing. The bad-key tests reach Anthropic, OpenAI, and OpenRouter with no credential at all, since refusing an invalid key needs no valid one. Point `LLAMA_SERVER` at a local `llama-server` and the whole openai-compat path runs for free.
@@ -397,7 +400,14 @@ LLAMA_SERVER=http://127.0.0.1:8080 make test-live
 OPENAI_MODEL=<a cheap model> make test-live
 ```
 
-Nothing runs on its own. There is no CI here, and `pyproject.toml` deselects both the container and the live suites, so `make test` is the only one that runs unasked.
+`make test-agents` does one real run per shipped agent: its image, a real model, the sealed relay (hermes runs `open`), and a `REPORT.md`. The task hashes a random nonce with `python3`, so the digest in the report shows code ran in the container. Every run spends money, so the suite skips unless `AGENT_LIVE=1`, which the target sets. An agent whose provider key is unset is skipped. claude uses Anthropic, codex OpenAI, and the rest OpenRouter under `--budget`; `ANTHROPIC_MODEL`, `OPENAI_MODEL` and `OPENROUTER_MODEL` override the models.
+
+```text
+make test-agents
+make test-agents ARGS='-k "minima or hax"'
+```
+
+Nothing runs on its own. `pyproject.toml` deselects the container, live and agent suites, so `make test` is the only one that runs unasked.
 
 ## Measured on this setup
 

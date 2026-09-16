@@ -44,7 +44,7 @@ def test_every_route_names_a_real_protocol():
 
 def test_the_default_allowlist_matches_the_provider_routes():
     """proxy.DEFAULT_ALLOW is what cli.py passes when no --proxy-allow-path is
-    given, and scripts/sanduk.py carries its own copy of it."""
+    given."""
     assert set(proxy.DEFAULT_ALLOW) == set(ANTHROPIC_PROVIDER.routes)
 
 

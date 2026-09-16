@@ -62,6 +62,9 @@ test-container:  ## Integration suite: boots real containers; needs `make image`
 test-live:  ## Live provider suite: needs LLAMA_SERVER, or a provider key
 	@$(RUN) pytest -q -m provider_live
 
+test-agents:  ## One real run per agent; spends money. ARGS='-k minima'
+	@AGENT_LIVE=1 $(RUN) pytest -q -m agent_live $(ARGS)
+
 test-all:  ## Every suite
 	@$(RUN) pytest -q -m ""
 
@@ -73,16 +76,16 @@ coverage-html:  ## Fast suite with an HTML coverage report
 	@echo "Coverage report: htmlcov/index.html"
 
 lint:  ## Lint with ruff, applying fixes
-	@$(RUN) ruff check --fix src/ tests/ scripts/
+	@$(RUN) ruff check --fix src/ tests/
 
 lint-check:  ## Lint with ruff, reporting only
-	@$(RUN) ruff check src/ tests/ scripts/
+	@$(RUN) ruff check src/ tests/
 
 format:  ## Format with ruff
-	@$(RUN) ruff format src/ tests/ scripts/
+	@$(RUN) ruff format src/ tests/
 
 format-check:  ## Check formatting without modifying files
-	@$(RUN) ruff format --check src/ tests/ scripts/
+	@$(RUN) ruff format --check src/ tests/
 
 typecheck:  ## Type check with mypy
 	@$(RUN) mypy src/$(PKG)

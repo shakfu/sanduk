@@ -245,8 +245,6 @@ The tag is `sanduk-<recipe>:<sha12>`. The hash covers the rendered Containerfile
 
 - **hax, hermes** create their user; the others modify `node`. The renderer handles both.
 
-`scripts/sanduk.py` embeds the rendered `claude` Containerfile; `tests/test_script.py` keeps the two identical.
-
 A handler without `recipe` names `image` and `containerfile` as before, and takes no kits. `--containerfile` still builds from a file, as does `--image` with an existing tag.
 
 ## Kits
@@ -325,6 +323,7 @@ Every shipped agent discovers `SKILL.md` directories ([Agent Skills spec](https:
 | pi | `.agents/skills` | [skills.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/skills.md) |
 | prime | not set: UNCONFIRMED, so kit skills are refused for prime | -- |
 | hax | `.agents/skills` | [usage.md](https://github.com/OleksandrChekhovskyi/hax/blob/main/docs/usage.md) |
+| minima | not set: minima reads no skills | -- |
 | hermes | `.hermes/skills` | [skills.md](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/features/skills.md) |
 
 One skill text serves every agent: the same files go into each agent's `skills_dir`. Skill text therefore names shell commands, never an agent's tool names such as claude's `Bash`.

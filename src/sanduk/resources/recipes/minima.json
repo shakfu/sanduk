@@ -1,0 +1,32 @@
+{
+  "name": "minima",
+  "description": "minima, a static musl binary, on debian:trixie-slim with no language runtime",
+  "agent": "minima",
+  "from": "docker.io/library/debian:trixie-slim",
+  "user": "agent",
+  "home": "/home/agent",
+  "sections": [
+    {
+      "name": "base-tools",
+      "type": "apt",
+      "install": ["git", "ripgrep", "ca-certificates", "curl", "jq", "python3"]
+    },
+    {
+      "name": "minima",
+      "type": "binary",
+      "artifacts": {
+        "amd64": {
+          "url": "https://github.com/shakfu/minima/releases/download/0.2.2/minima-0.2.2-linux-x86_64.tar.gz",
+          "sha256": "a841a2b2a3893950f0ceb451ed03dccd303b20bfd100673fa3504ba8c828a365",
+          "member": "minima"
+        },
+        "arm64": {
+          "url": "https://github.com/shakfu/minima/releases/download/0.2.2/minima-0.2.2-linux-aarch64.tar.gz",
+          "sha256": "ea8fbba1aa8c63845050cfdf7283c0a829fd5d31aea2b7c16a17441de029f3be",
+          "member": "minima"
+        }
+      }
+    }
+  ],
+  "entrypoint": ["minima"]
+}

@@ -243,7 +243,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         help="build the image from this Containerfile instead of a recipe",
     )
-    g.add_argument("--rebuild", action="store_true", help="rebuild the image first")
+    g.add_argument("-b", "--rebuild", action="store_true", help="rebuild the image first")
 
     g = p.add_argument_group("agent")
     agent_flag(g)

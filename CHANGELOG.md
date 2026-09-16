@@ -6,6 +6,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `--agent minima` runs [minima](https://github.com/shakfu/minima), a static Rust agent, against every provider. It needs minima 0.2.2, the first release with prebuilt Linux binaries; `--json` arrived in 0.2.1. The recipe installs a checksummed release tarball rather than building from crates.io, which would put a Rust toolchain and several minutes of compilation into every image build.
+
+- `make test-agents` runs each shipped agent once against a real model, through its own image and, except for hermes, the sealed relay. The task is to hash a random nonce with `python3`, so the digest in `REPORT.md` shows that code ran in the container; a model cannot produce it otherwise. Runs spend money, so the suite skips unless `AGENT_LIVE=1` and caps OpenRouter runs with `--budget`.
+
+- `sanduk run -b` is short for `--rebuild`. A run already builds a missing image or a changed recipe; `-b` forces a rebuild of an image that exists.
+
+### Removed
+
+- `scripts/sanduk.py`, the pre-package standalone script. It supported only Claude Code, Anthropic and Apple `container`, and every relay test ran twice to keep its copy of the relay in step.
+
 - Kits and recipes. A recipe is a JSON description of an agent image, rendered to one Containerfile; each agent's image now comes from a shipped recipe, and the seven hand-written Containerfiles are gone. A kit is a bundle of pinned tools and one skill text shared by every agent. `docs` ships with d2 and officecli, and `claude-docs` is claude with it.
 
   ```text
@@ -18,6 +28,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   A recipe pins each kit by the SHA-256 of its `kit.json`, and `kit.json` pins every download and skill file, so a changed kit stops the build rather than changing the image unseen. Recipes inherit by name, unpinned, with parent sections first, since a child step may need a parent's packages; start-vm, where the model comes from, runs the child's first. Images are tagged `sanduk-<recipe>:<hash>` over everything the build reads, so an old `sanduk:latest` or `sanduk-<agent>:latest` is no longer used or deleted by `destroy`: remove it with `container image delete` or `docker rmi`. Porting pinned three installs that were not: Claude Code, opencode's two provider drivers, and hax's tarball, which had no checksum. `assistant.toml` takes `recipe`, and `sanduk list agents` shows each agent's recipe where it showed an image. See [docs/dev/kits.md](docs/dev/kits.md).
 
 ### Fixed
+
+- A client that closes a keep-alive connection with a reset no longer prints a `ConnectionResetError` traceback per call. codex and minima both did it after most streamed responses, so a run printed a traceback on most turns. The call was already relayed and counted.
+
+  A client that resets while the relay waits on upstream is now charged. Writing the response headers failed before the block that reads and records the cost, so the call went uncounted, and under `--budget` a billed call never reached the total. The relay now drains upstream for the cost, as it already did for a disconnect mid-stream.
 
 - A streamed `/v1/responses` call through the relay no longer fails with `400 Unknown parameter: 'stream_options.include_usage'`. The relay added the field on every protocol route of a provider that needs it, but it belongs to Chat Completions. Every `--agent codex --provider openai` run in a relayed mode failed on its first call. A streamed Responses reply also logged `usage=?`: its counts are in `response.completed` under `response.usage`, which the usage reader did not look in. `make test-live` now runs a streamed Responses call through the relay, against OpenAI with `OPENAI_MODEL` set and against llama-server with `LLAMA_SERVER`.
 

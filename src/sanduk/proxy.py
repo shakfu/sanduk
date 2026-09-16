@@ -5,8 +5,7 @@ API. Since it has to exist anyway, injecting the key here costs two lines and
 keeps the credential on the host.
 
 Provider coupling lives in `sanduk.providers`. The constants below are the
-Anthropic defaults, kept as module names because `scripts/sanduk.py` shares
-them.
+Anthropic defaults.
 """
 
 from __future__ import annotations
@@ -21,7 +20,7 @@ import time
 import zlib
 from collections.abc import Iterable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import cast
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 from sanduk.providers import (
@@ -148,6 +147,17 @@ class ProxyServer(ThreadingHTTPServer):
     def __init__(self, addr: tuple[str, int], cfg: Config) -> None:
         super().__init__(addr, Handler)
         self.cfg = cfg
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        """Skip the traceback for a client that dropped its connection.
+
+        `Handler.forward` catches a disconnect once upstream has answered and
+        charges the call. One that reaches here happened before any call was
+        made, most often while waiting for the next keep-alive request.
+        """
+        if isinstance(sys.exc_info()[1], ConnectionError):
+            return
+        super().handle_error(request, client_address)
 
 
 class UsageSniffer:
@@ -518,13 +528,6 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(502, "upstream unreachable")
             return
 
-        self.send_response(resp.status)
-        for k, v in resp.getheaders():
-            if k.lower() not in STRIP_RESP:
-                self.send_header(k, v)
-        self.send_header("Transfer-Encoding", "chunked")
-        self.end_headers()
-
         proto = cfg.protocol(urlsplit(self.path).path)
         sniffer = UsageSniffer(
             resp.getheader("Content-Type", ""),
@@ -534,6 +537,18 @@ class Handler(BaseHTTPRequestHandler):
         sent = 0
         gone = charged = False
         try:
+            # Inside the try: a client that left while upstream was answering
+            # fails here, and the call it made is still billed.
+            try:
+                self.send_response(resp.status)
+                for k, v in resp.getheaders():
+                    if k.lower() not in STRIP_RESP:
+                        self.send_header(k, v)
+                self.send_header("Transfer-Encoding", "chunked")
+                self.end_headers()
+            except (BrokenPipeError, ConnectionResetError):
+                self.note("client hung up before the response; still reading the cost")
+                self.close_connection = gone = True
             while True:
                 # read1, not read: read(n) blocks until n bytes arrive, which
                 # would stall every server-sent event behind a full buffer.

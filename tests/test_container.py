@@ -57,6 +57,7 @@ VERSION_MARKER = {
     "codex": ("--version", r"codex-cli"),
     "hax": ("--version", r"hax"),
     "hermes": ("--help", r"--query|QUERY"),
+    "minima": ("--version", r"minima"),
     "opencode": ("--version", r"\d+\.\d+\.\d+"),
     "pi": ("--version", r"\d+\.\d+\.\d+"),
     "prime": ("--version", r"\d+\.\d+\.\d+"),

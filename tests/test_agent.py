@@ -16,6 +16,7 @@ from sanduk.agents.claude import ClaudeCode
 from sanduk.agents.codex import Codex
 from sanduk.agents.hax import Hax
 from sanduk.agents.hermes import Hermes
+from sanduk.agents.minima import Minima
 from sanduk.agents.opencode import OpenCode
 from sanduk.agents.pi import Pi
 from sanduk.agents.prime import Prime
@@ -52,6 +53,7 @@ def test_the_shipped_handlers_are_found_without_install_metadata():
         "codex",
         "hax",
         "hermes",
+        "minima",
         "opencode",
         "pi",
         "prime",
@@ -822,3 +824,101 @@ def test_hermes_needs_a_model():
     args.proxy = False
     with pytest.raises(AgentboxError, match="--model is required"):
         Hermes().check(args, get_provider("openai-compat"))
+
+
+# --- minima -----------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("provider", "expected", "base"),
+    [
+        ("anthropic", "anthropic", RELAY + "/v1"),
+        ("openai", "openai", RELAY + "/v1"),
+        ("openrouter", "openrouter", RELAY + "/api/v1"),
+        ("openai-compat", "llamacpp", RELAY + "/v1"),
+    ],
+)
+def test_minima_names_the_provider_of_the_same_wire_format(provider, expected, base):
+    """minima posts <base>/messages, /responses or /chat/completions by its
+    --provider, so the prefix is on the base URL and the dialect is the flag."""
+    args = flags(agent="minima", model="m")
+    Minima().check(args, get_provider(provider))
+    wiring = Minima().wire(args, get_provider(provider), RELAY)
+    assert wiring.base_url == base
+    assert f"--provider={expected}" in argv_of(Minima(), args, get_provider(provider))
+
+
+def test_minima_reads_its_own_variables():
+    wiring = Minima().wire(flags(agent="minima"), get_provider("openai"), None)
+    assert (wiring.key_env, wiring.base_url_env) == ("MINIMA_API_KEY", "MINIMA_BASE_URL")
+    assert wiring.base_url == "https://api.openai.com/v1"
+
+
+def test_minima_needs_a_model():
+    with pytest.raises(AgentboxError, match="--model"):
+        Minima().check(flags(agent="minima"), get_provider("openrouter"))
+
+
+@pytest.mark.parametrize(
+    "flag",
+    [{"allowed_tools": "Read"}, {"permission_mode": "plan"}, {"effort": "max"}],
+)
+def test_minima_refuses_a_flag_it_has_no_equivalent_for(flag):
+    with pytest.raises(AgentboxError, match="no minima equivalent"):
+        Minima().check(flags(agent="minima", model="m", **flag), get_provider("openai"))
+
+
+def test_minima_binds_the_task_to_its_flag():
+    """A task starting with a dash must not parse as an option."""
+    args = flags(agent="minima", model="m", max_turns=3)
+    argv = argv_of(Minima(), args, get_provider("openai"), "--help me")
+    assert argv[0] == "--json"
+    assert "--max-turns=3" in argv
+    assert argv[-1] == "--prompt=--help me"
+
+
+def test_minima_reports_the_result_record():
+    outcome = drain(
+        Minima().reader(),
+        [
+            {"type": "turn", "text": "looking", "input_tokens": 10, "output_tokens": 2},
+            {"type": "tool_call", "name": "bash", "arguments": "{}"},
+            {"type": "tool_result", "ok": True, "note": None, "output": ""},
+            {
+                "type": "result",
+                "outcome": "complete",
+                "text": "done",
+                "error": None,
+                "turns": 2,
+                "input_tokens": 1500,
+                "output_tokens": 40,
+            },
+        ],
+    )
+    assert outcome == Outcome(ok=True, text="done", stats="2 turns, 1,500 in / 40 out")
+
+
+@pytest.mark.parametrize(
+    ("record", "error"),
+    [
+        ({"outcome": "error", "error": "stopped after 3 turns"}, "stopped after 3 turns"),
+        ({"outcome": "cancelled", "error": None}, "cancelled"),
+    ],
+)
+def test_any_minima_outcome_but_complete_is_a_failure(record, error):
+    outcome = drain(Minima().reader(), [{"type": "result", **record}])
+    assert outcome is not None
+    assert not outcome.ok
+    assert outcome.error == error
+
+
+def test_minima_without_a_result_has_no_outcome():
+    assert drain(Minima().reader(), [{"type": "turn", "text": "hi"}]) is None
+
+
+def test_minima_traces_turns_and_tool_calls(capsys):
+    reader = Minima().reader()
+    reader.event({"type": "turn", "text": "reading"}, quiet=False)
+    reader.event({"type": "tool_call", "name": "read"}, quiet=False)
+    reader.event({"type": "tool_result", "ok": False}, quiet=False)
+    assert capsys.readouterr().out == "  . reading\n  > read\n  ! tool error\n"

@@ -2,20 +2,13 @@
 
 Every test runs against a local fake upstream, so the suite makes no API calls,
 costs nothing, and needs no key.
-
-Every test taking the `relay` fixture runs twice: once against the package and
-once against `scripts/sanduk.py`, which carries its own copy of the relay. The
-relay is the security boundary and exists in both, so a fix applied to one and
-not the other is the failure this catches. It replaces an AST comparison of the
-two sources, which could not survive the package gaining providers the script
-does not have.
 """
 
 import gzip
 import http.client
-import importlib.util
 import json
-import pathlib
+import socket
+import struct
 import threading
 import time
 import urllib.error
@@ -25,23 +18,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from sanduk import providers, proxy
-
-SCRIPT = pathlib.Path(__file__).parent.parent / "scripts" / "sanduk.py"
-
-
-def _load_script():
-    """Import scripts/sanduk.py as a module. Its PEP 723 header is a comment,
-    and nothing runs at import: main() is behind an __main__ guard."""
-    spec = importlib.util.spec_from_file_location("sanduk_script", SCRIPT)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-RELAYS = {"package": proxy}
-if SCRIPT.is_file():
-    RELAYS["script"] = _load_script()
 
 REAL_KEY = "sk-ant-api03-REAL-KEY-STAYS-ON-HOST"
 TOKEN = "run-token-for-tests"
@@ -109,24 +85,15 @@ def upstream(plaintext_upstream):
     srv.shutdown()
 
 
-@pytest.fixture(params=sorted(RELAYS), ids=sorted(RELAYS))
-def relay_module(request):
-    """The relay implementation under test. Tests that patch relay internals
-    must reach through this, not through `proxy`: the script's Handler is a
-    different class from the package's."""
-    return RELAYS[request.param]
-
-
 @pytest.fixture
-def relay(relay_module, upstream):
-    """Both copies of the relay, driven through one identical interface."""
-    impl = relay_module
+def relay(upstream):
+    """Start relays against the fake upstream; each is shut down afterwards."""
     hostport, seen = upstream
     started = []
 
     def make(**kw):
         kw.setdefault("upstream", hostport)
-        srv, port = impl.start_proxy(REAL_KEY, TOKEN, "127.0.0.1", **kw)
+        srv, port = proxy.start_proxy(REAL_KEY, TOKEN, "127.0.0.1", **kw)
         started.append(srv)
         return port, seen, srv
 
@@ -420,10 +387,10 @@ def test_streamed_usage_reaches_the_log_line(plaintext_upstream, monkeypatch):
     assert "out=16517" in notes[-1]
 
 
-def test_responses_without_usage_get_no_suffix(relay, relay_module, monkeypatch):
+def test_responses_without_usage_get_no_suffix(relay, monkeypatch):
     """/v1/models reports no tokens; the line must not grow four zero fields."""
     notes = []
-    monkeypatch.setattr(relay_module.Handler, "note", lambda self, msg: notes.append(msg))
+    monkeypatch.setattr(proxy.Handler, "note", lambda self, msg: notes.append(msg))
     port, _, _ = relay()
     assert call(port, "/v1/models")[0] == 200
     deadline = time.monotonic() + 5
@@ -1135,11 +1102,12 @@ def test_an_unbudgeted_relay_is_not_serialised(plaintext_upstream):
         relay.shutdown()
 
 
-def slow_stream(cost, path="/api/v1/chat/completions"):
+def slow_stream(cost, path="/api/v1/chat/completions", delay=0.0):
     """A fake OpenRouter that reports its cost early, then streams a long tail.
 
     The window matters: the client has to go away *inside* the forwarding
     loop, not at the terminator, which is where a short response ends.
+    `delay` holds back the response headers, for a client that leaves first.
     """
 
     class Handler(BaseHTTPRequestHandler):
@@ -1154,6 +1122,7 @@ def slow_stream(cost, path="/api/v1/chat/completions"):
 
         def do_POST(self):
             self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            time.sleep(delay)
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Transfer-Encoding", "chunked")
@@ -1209,6 +1178,43 @@ def test_a_call_the_client_abandons_is_still_counted(plaintext_upstream):
         relay.shutdown()
 
 
+def test_a_call_the_client_leaves_before_its_headers_is_still_counted(
+    plaintext_upstream, capfd
+):
+    """The client resets while the relay waits on upstream. Writing the
+    response headers then fails before the loop that charges the call, so it
+    went uncounted: under --budget, a billed call the total never saw."""
+    srv, _, path = slow_stream(0.4, delay=0.5)
+    relay, port = proxy.start_proxy(
+        REAL_KEY,
+        TOKEN,
+        "127.0.0.1",
+        upstream=f"127.0.0.1:{srv.server_address[1]}",
+        provider=providers.get_provider("openrouter"),
+        budget=10.0,
+    )
+    try:
+        body = message()
+        head = (
+            f"POST {path} HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {TOKEN}\r\n"
+            f"Content-Type: application/json\r\nContent-Length: {len(body)}\r\n\r\n"
+        )
+        sock = socket.create_connection(("127.0.0.1", port))
+        sock.sendall(head.encode() + body)
+        time.sleep(0.2)  # the relay is now waiting on upstream
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+        sock.close()
+        deadline = time.monotonic() + 15
+        while relay.cfg.requests == 0 and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert relay.cfg.requests == 1
+        assert relay.cfg.spent == pytest.approx(0.4), "billed work went uncounted"
+        assert "Traceback" not in capfd.readouterr().err
+    finally:
+        relay.shutdown()
+        srv.shutdown()
+
+
 def test_a_response_with_no_cost_stops_the_run_rather_than_counting_zero(
     plaintext_upstream,
 ):
@@ -1262,3 +1268,25 @@ def test_every_refusal_carries_its_own_kind(relay):
     assert "run token" in error["message"]
     _, body = call(port, "/v1/nope", body=message())
     assert json.loads(body)["error"]["type"] == "forbidden"
+
+
+def test_a_client_resetting_an_idle_connection_prints_no_traceback(relay, capfd):
+    """A keep-alive client that resets the connection after its response resets
+    the socket the handler waits on for the next request. The call is already
+    relayed and counted, so the reset is not an error worth a traceback."""
+    port, _, srv = relay()
+    idle = threading.active_count()
+    sock = socket.create_connection(("127.0.0.1", port))
+    sock.sendall(
+        f"GET /v1/models HTTP/1.1\r\nHost: x\r\nx-api-key: {TOKEN}\r\n\r\n".encode()
+    )
+    assert sock.recv(4096).startswith(b"HTTP/1.1 200")
+    # SO_LINGER with a zero timeout makes close() send RST instead of FIN.
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+    sock.close()
+    # The handler thread ends once it has dealt with the reset.
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and threading.active_count() > idle:
+        time.sleep(0.01)
+    assert srv.cfg.requests == 1
+    assert "Traceback" not in capfd.readouterr().err

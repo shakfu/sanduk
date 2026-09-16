@@ -483,6 +483,17 @@ def test_force_rebuilds_an_existing_image(engine):
     assert [image for image, _ in engine.built] == [IMAGE]
 
 
+def test_run_b_rebuilds_an_existing_image(engine, tmp_path):
+    """`-b` is `--rebuild`: a run otherwise builds only a missing image."""
+    from sanduk.cli import ensure_image, parse_args, select
+
+    args = parse_args(["run", "task", "-w", str(tmp_path), "-b"])
+    sel = select(args)
+    engine.images.add(sel.image)
+    ensure_image(engine, args, sel, tmp_path)
+    assert [image for image, _ in engine.built] == [sel.image]
+
+
 class OwnerEngine(StubEngine):
     """Docker's side of the check, with the image already built."""
 

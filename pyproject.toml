@@ -39,6 +39,7 @@ claude = "sanduk.agents.claude:ClaudeCode"
 codex = "sanduk.agents.codex:Codex"
 hax = "sanduk.agents.hax:Hax"
 hermes = "sanduk.agents.hermes:Hermes"
+minima = "sanduk.agents.minima:Minima"
 opencode = "sanduk.agents.opencode:OpenCode"
 pi = "sanduk.agents.pi:Pi"
 prime = "sanduk.agents.prime:Prime"
@@ -63,10 +64,11 @@ source-include = ["tests/**", "CHANGELOG.md", "LICENSE"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-m 'not container and not provider_live'"
+addopts = "-m 'not container and not provider_live and not agent_live'"
 markers = [
     "container: boots real containers; slow, needs the engine running",
     "provider_live: talks to a real provider; needs a server or a key",
+    "agent_live: one real agent run per agent; spends money, needs AGENT_LIVE=1",
 ]
 
 [tool.ruff]

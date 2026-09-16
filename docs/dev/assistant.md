@@ -1,6 +1,13 @@
 # Assistants: scheduled runs, persistent state, a mailbox
 
-Status: done, 2026-09-09. Target: 0.2.2. All three phases landed.
+Status: done, 2026-09-09. Target: 0.2.2. All three phases landed. Line numbers below refer to the code at that date.
+
+Since this record:
+
+- Token counts per wakeup landed: a wakeup passes `--stats-file` to `run`, and the `runs` table has `stats` and `error` columns.
+- The `proxy` key became `mode`, which defaults to `sealed`; the warning fires for `mode = "open"`.
+- A wakeup calls `cli.main` with a `sanduk run` argv built by `run_argv`, not `run()` with a namespace.
+- `approve`, `reject` and `outbox --pending` exist; the schema and command tables below predate them. `assistants.py` is the current reference.
 
 Scope: sanduk grows a second mode. `run` stays what it is -- one container, one report, nothing kept. `assistant` adds identity, a schedule, state that outlives a run, and a mailbox. The sandbox model does not change: one container per wakeup, deleted at the end, key on the host, relay per run.
 

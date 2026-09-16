@@ -164,6 +164,7 @@ def agent_flag(p: argparse.ArgumentParser | argparse._ArgumentGroup) -> None:
 def image_flags(p: argparse.ArgumentParser | argparse._ArgumentGroup) -> None:
     """--recipe and --kit: what the image is built from. See docs/dev/kits.md."""
     p.add_argument(
+        "-r",
         "--recipe",
         metavar="NAME|PATH",
         help="recipe that builds the image (default: the agent's). `sanduk list "
@@ -487,7 +488,7 @@ def _add_engine_commands(
         "destroy", parents=[engine], help="clean, plus the image and the network"
     )
     agent_flag(p)
-    p.add_argument("--recipe", metavar="NAME|PATH", help="default: the agent's")
+    p.add_argument("-r", "--recipe", metavar="NAME|PATH", help="default: the agent's")
     p.add_argument(
         "-i", "--image", help="image to delete (default: every build of the recipe)"
     )

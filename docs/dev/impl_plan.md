@@ -1,6 +1,13 @@
 # Multi-provider implementation plan
 
-Status: proposed, 2026-09-07. Target: 0.2.0.
+Status: done, 2026-09-08. Target: 0.2.0. Line numbers below refer to the code at that date.
+
+Since this plan:
+
+- Docker is a second runtime, so the Apple-only scope no longer holds.
+- `sanduk.agent` has a handler registry; see [docs/agents.md](../agents.md).
+- `scripts/sanduk.py` was deleted on 2026-09-16. The relay tests run against the package only, so the two-copy comparison described below is gone.
+- The open question on `--max-tokens-cap` is settled: one number, written to each protocol's `cap_field`.
 
 Scope: the relay learns four providers. The container engine stays Apple `container` only. No agent registry (see "Any agent", below).
 
@@ -111,7 +118,7 @@ Three keys live in the owner's shell at once, so two of these are new requiremen
 
 1. **No credential crosses the relay.** Parameterised over all four providers: a container-supplied `x-api-key`, `authorization`, or `api-key` never reaches upstream. This is the highest-risk edit in the plan; the failure is silent.
 
-2. **Only the selected provider's key is read.** With `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `OPENROUTER_API_KEY` all exported, the container env holds the run token and zero real keys. The README currently claims "Real key present in container environment: 0 occurrences"; this widens it to all three.
+2. **Only the selected provider's key is read.** With `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `OPENROUTER_API_KEY` all exported, the container env holds the run token and zero real keys. The README then claimed "Real key present in container environment: 0 occurrences"; this widens it to all three.
 
 3. **The route table is exact and provider-scoped.** `/v1/chat/completions` must 403 under `openrouter`, whose real path is `/api/v1/chat/completions`.
 

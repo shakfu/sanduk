@@ -10,6 +10,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `make test-agents` runs each shipped agent once against a real model, through its own image and, except for hermes, the sealed relay. The task is to hash a random nonce with `python3`, so the digest in `REPORT.md` shows that code ran in the container; a model cannot produce it otherwise. Runs spend money, so the suite skips unless `AGENT_LIVE=1` and caps OpenRouter runs with `--budget`.
 
+- `-r` is short for `--recipe` in `run`, `build`, `shell` and `destroy`.
+
 - `sanduk run -b` is short for `--rebuild`. A run already builds a missing image or a changed recipe; `-b` forces a rebuild of an image that exists.
 
 ### Removed
@@ -66,8 +68,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A response that owes a usage block and carries none stops a budgeted run instead of counting as free. Zero and unknown had the same effect on the total, so a run could spend past its ceiling without the figure moving.
 
 - An operator's `assistant disable` survives a wakeup already in flight. `schedule_next` computed the flag from the outcome alone, so a wakeup that then finished well re-enabled what the operator had just stopped. A set flag is preserved; failures can still set one.
-
-`scripts/sanduk.py` has the two report fixes.
 
 ## [0.2.4]
 

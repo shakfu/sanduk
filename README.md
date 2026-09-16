@@ -2,7 +2,7 @@
 
 'sanduk', pronounced SAN-dook, means 'box' in Arabic.
 
-sanduk is a Python CLI tool and package that makes it easy to run an agent inside a disposable container. The agent does its work, writes a report to a bind-mounted directory, and when it’s finished, the container is deleted.
+sanduk is a Python CLI and package that runs a coding agent inside a disposable container. The agent does its work and writes a report to a bind-mounted directory. Then the container is deleted.
 
 Eight agents are available:
 
@@ -22,7 +22,7 @@ Eight agents are available:
 
 - [prime-agent](https://github.com/PrimeIntellect-ai/prime-agent)
 
-Two container engines are current supported:
+Two container engines are supported:
 
 - [apple container](https://github.com/apple/container) on macOS
 
@@ -32,7 +32,7 @@ Each sits behind a registry -- an agent behind `sanduk.agent.Agent`, an engine b
 
 Four providers are supported: [Anthropic](https://www.anthropic.com/), [OpenAI](https://openai.com/), [OpenRouter](https://openrouter.ai/), and any OpenAI-compatible server, which includes a local `llama-server`. See [Providers](#providers).
 
-In its stronger mode the container has no route off the host and never holds the API key: a host-side relay injects the credential, and the container gets a per-run token that is worthless anywhere else. Against a local model there is no key to hold, and nothing leaves the machine at all.
+In `sealed` mode the container has no route off the host and never holds the API key: a host-side relay injects the credential, and the container gets a per-run token that is worthless anywhere else. Against a local model there is no key to hold, and nothing leaves the machine at all.
 
 ## Requirements
 
@@ -40,7 +40,7 @@ In its stronger mode the container has no route off the host and never holds the
 
   - Apple's [`container`](https://github.com/apple/container) 1.2.0 or later, which needs Apple silicon and macOS 26 or later
 
-  - `docker`, with a daemon on this kernel. `--proxy` needs the bridge gateway to be an address this host can bind, which Docker Desktop, Colima and Lima do not give. Not the snap package: its confinement blocks every container sanduk starts, and `run` refuses it.
+  - `docker`, with a daemon on this kernel. The relayed modes need the bridge gateway to be an address this host can bind, which Docker Desktop, Colima and Lima do not give. Not the snap package: its confinement blocks every container sanduk starts, and `run` refuses it.
 
 - Python 3.11 or later. `uv` as well, for a source checkout: the Makefile targets run through it
 
@@ -56,7 +56,7 @@ Each agent has its own image. Claude Code, codex, opencode, pi and prime-agent r
 pip install sanduk
 ```
 
-Note that `uv tool install sanduk` and `pipx install sanduk` do the same thing into their own environment, which is what you want for a globally available command line tool. There are no Python dependencies to resolve either way; a container engine remains as a requirement.
+`uv tool install sanduk` and `pipx install sanduk` install it into its own environment, which suits a command-line tool. sanduk has no Python dependencies; it needs only a container engine.
 
 The wheel carries a recipe per agent, so `sanduk build` works from a plain install with no checkout.
 
@@ -65,7 +65,7 @@ The wheel carries a recipe per agent, so `sanduk build` works from a plain insta
 ```text
 pip install sanduk
 export OPENAI_API_KEY=sk-...
-sanduk build                                        # the codex image
+sanduk build                                        # optional: run builds a missing image
 sanduk run 'Summarise every Python file here.' -w ./work --mode sealed
 sanduk --help
 ```
@@ -114,7 +114,7 @@ sanduk ps                  list sanduk containers
 sanduk stop                stop them, leaving them on disk
 sanduk clean               stop and delete them
 sanduk destroy             clean, plus the image and every mode's network
-sanduk system status       whether the engine is ready
+sanduk system status       whether the engine is ready (also start, stop)
 sanduk list agents         what each registered handler speaks
 sanduk list providers      the URL an agent must be given, per provider
 sanduk list runtimes       engines, whether each is installed, and the default
@@ -175,22 +175,18 @@ The relay only forwards. It does not translate between protocols, so the agent h
 --agent prime      prime-agent   every provider
 ```
 
-A handler says which image carries the agent, what flags drive it headlessly, which variables it reads its endpoint from, and how to read its JSON stream. Nothing else about a run differs, so an eighth agent is a class in your own package, advertised in the `sanduk.agents` entry-point group or named directly as `--agent mypkg.handlers:MyAgent`. See [docs/agents.md](docs/agents.md).
+A handler says which image carries the agent, what flags drive it headlessly, which variables it reads its endpoint from, and how to read its output. Nothing else about a run differs, so another agent is a class in your own package, advertised in the `sanduk.agents` entry-point group or named directly as `--agent mypkg.handlers:MyAgent`. See [docs/agents.md](docs/agents.md).
 
 ```text
 sanduk run 'Review this.' -w ./repo --mode sealed --agent hax \
     --provider openrouter --model anthropic/claude-sonnet-5
 ```
 
-hax is a static C binary with no approval gate, which suits a container that is already the boundary. The image carries no language runtime. `--allowed-tools` and `--permission-mode` are Claude Code flags and are refused rather than dropped.
-
-minima is a static Rust binary, also without an approval gate. sanduk runs it with `-p --json`, which needs minima 0.2.1 or later; the image installs 0.2.2. Its `--provider` fixes the wire format, so sanduk names the minima provider that matches and moves the endpoint with `MINIMA_BASE_URL`. `--model` is required: a fresh container has no remembered model. `--effort` is refused along with the two Claude Code flags. minima reads no skills, so kits carrying skills are refused for it.
-
 codex accepts only `wire_api = "responses"`, so it pairs with `openai` or with an `openai-compat` server that answers `/v1/responses`. It has no base-URL variable: sanduk passes the endpoint as a `-c model_providers...` override, which is why `argv` is handed the run's wiring. Its own sandbox is disabled with `--sandbox danger-full-access`, since the container is the boundary and codex's sandbox would only stop the work; `--skip-git-repo-check` is passed because the bind mount is usually not a repository.
 
-opencode takes its whole configuration from `OPENCODE_CONFIG_CONTENT`, so no `opencode.json` is written into the bind mount, where it would sit in your repository and be editable by the agent reading it. The provider block picks an npm driver by wire protocol: `@ai-sdk/anthropic` for Messages, `@ai-sdk/openai-compatible` for Chat Completions. Both are installed in the image, because the proxy network has no route to fetch one at runtime. `--model` is required: the config names one model and there is nothing to put in it otherwise.
+hax is a static C binary with no approval gate, which suits a container that is already the boundary. The image carries no language runtime. `--allowed-tools` and `--permission-mode` are Claude Code flags and are refused rather than dropped.
 
-hermes is the one agent that cannot use the relay, and the only one whose image carries no node. It ignores every endpoint override there is -- measured against 0.19.0 with a stub upstream inside the container, `--base_url`, `OPENROUTER_BASE_URL` and `model.base_url` in `~/.hermes/config.yaml` all left the call going to openrouter.ai -- so `check` refuses `key-safe` and `sealed` by name rather than letting a run fail at its first call. `--mode open` is what remains: a disposable container and a bind mount, with your key inside it. `--model` is required and takes an OpenRouter id. It also prints prose rather than JSON, which is what `Reader.line` exists for, and it reports API calls rather than tokens, so its stats line says calls.
+hermes is the one agent that cannot use the relay. It ignores every endpoint override there is -- measured against 0.19.0 with a stub upstream inside the container, `--base_url`, `OPENROUTER_BASE_URL` and `model.base_url` in `~/.hermes/config.yaml` all left the call going to openrouter.ai -- so `check` refuses `key-safe` and `sealed` by name rather than letting a run fail at its first call. `--mode open` is what remains: a disposable container and a bind mount, with your key inside it. `--model` is required and takes an OpenRouter id. It also prints prose rather than JSON, which is what `Reader.line` exists for, and it reports API calls rather than tokens, so its stats line says calls.
 
 ```text
 export OPENROUTER_API_KEY=sk-or-v1-...
@@ -198,9 +194,13 @@ sanduk run 'Summarise a.py.' -w ./work --agent hermes --provider openrouter \
     --model deepseek/deepseek-v4-flash-0731 --mode open --max-turns 6
 ```
 
-prime-agent is pi's CLI in PrimeIntellect's build: the release tarball declares `bin: prime-agent` and depends on the `@earendil-works/pi-*` packages, so its handler is a subclass of pi's and inherits the reader, the argv and the protocols. Three things differ, each measured rather than read. Its provider block names the credential's variable bare where pi writes `$NAME`. It has no `--no-approve`, so a `.prime/agent/settings.json` in the mounted directory is read: that steers the run without widening the box, which is the container and the relay either way. And its only tool is a Python REPL, so the image carries the kernel; without it the agent answers by trying to install `uv`, which the proxy network has no route for. The image installs a checksummed release tarball rather than an npm package.
+minima is a static Rust binary with no approval gate. sanduk runs it with `-p --json`, which needs minima 0.2.1 or later; the image installs 0.2.2. Its `--provider` fixes the wire format, so sanduk names the minima provider that matches and moves the endpoint with `MINIMA_BASE_URL`. `--model` is required: a fresh container has no remembered model. `--effort` is refused along with the two Claude Code flags. minima reads no skills, so kits carrying skills are refused for it.
 
-pi speaks all three protocols the relay carries, and its provider block names which one with an `api` field. It reads providers from `models.json` in its config directory, not from a variable or a flag, so the image's entrypoint writes that file from `SANDUK_PI_MODELS` and pi is never given the bind mount as a place to find one. `--model` is required, and `--no-approve` is passed so a `.pi/settings.json` in the mounted repository cannot steer the run. With `--provider anthropic` the base URL is the bare root: pi appends `/v1/messages` itself.
+opencode takes its whole configuration from `OPENCODE_CONFIG_CONTENT`, so no `opencode.json` is written into the bind mount, where it would sit in your repository and be editable by the agent reading it. The provider block picks an npm driver by wire protocol: `@ai-sdk/anthropic` for Messages, `@ai-sdk/openai-compatible` for Chat Completions. Both are installed in the image, because the proxy network has no route to fetch one at runtime. `--model` is required: the config names one model and there is nothing to put in it otherwise.
+
+pi speaks all three protocols the relay carries, and its provider block names which one with an `api` field. It reads providers from `models.json` in its config directory, not from a variable or a flag, so the image's entrypoint writes that file from `SANDUK_MODELS_JSON` and pi is never given the bind mount as a place to find one. `--model` is required, and `--no-approve` is passed so a `.pi/settings.json` in the mounted repository cannot steer the run. With `--provider anthropic` the base URL is the bare root: pi appends `/v1/messages` itself.
+
+prime-agent is pi's CLI in PrimeIntellect's build: the release tarball declares `bin: prime-agent` and depends on the `@earendil-works/pi-*` packages, so its handler is a subclass of pi's and inherits the reader, the argv and the protocols. Three things differ, each measured rather than read. Its provider block names the credential's variable bare where pi writes `$NAME`. It has no `--no-approve`, so a `.prime/agent/settings.json` in the mounted directory is read: that steers the run without widening the box, which is the container and the relay either way. And its only tool is a Python REPL, so the image carries the kernel; without it the agent answers by trying to install `uv`, which the proxy network has no route for. The image installs a checksummed release tarball rather than an npm package.
 
 ## Kits and recipes
 
@@ -223,7 +223,7 @@ sanduk build --recipe claude-docs --dry-run                        print the res
 - A recipe pins each kit by the SHA-256 of its `kit.json`, as `sanduk list kits` prints it. A changed kit stops the build.
 - `kit.json` pins every download and every skill file by its own hash, so the recipe's pin covers the whole kit.
 - Recipes inherit by name, left to right. A child can `remove` inherited kits, sections, env keys or section types.
-- A kit's skills land where the agent reads skills: `~/.claude/skills` for claude, `~/.agents/skills` for codex, hax, opencode and pi, `~/.hermes/skills` for hermes. They are root-owned and read-only.
+- A kit's skills land where the agent reads skills: `~/.claude/skills` for claude, `~/.agents/skills` for codex, hax, opencode and pi, `~/.hermes/skills` for hermes. They are root-owned and read-only. minima reads no skills, and where prime reads them is unconfirmed, so a kit with skills is refused for both.
 - Everything is installed at build time, so a `sealed` run fetches nothing. A kit that needs the network at run time is refused under `sealed`.
 - The image tag is `sanduk-<recipe>:<hash>` over everything the build reads. An edited recipe or kit builds a new image; `sanduk destroy` deletes every build of the recipe.
 
@@ -233,7 +233,7 @@ Your own recipes and kits go in `~/.config/sanduk/recipes/<name>.json` and `~/.c
 
 1. `sanduk-net` is created with `--internal`: no route off the host.
 
-2. vmnet only creates the host bridge while a container is attached, so a placeholder container is started first and torn down at the end.
+2. Under `--runtime apple`, vmnet creates the host bridge only while a container is attached, so a placeholder container is started first and torn down at the end. Docker needs none.
 
 3. The relay binds the bridge gateway only, so it is unreachable from Wi-Fi or LAN.
 
@@ -259,7 +259,7 @@ Only OpenRouter reports cost, so `--budget` is refused for the other providers r
 
 `--mount HOST:DEST[:ro]` puts another host directory in the container, beside the one `-w` gives it. Repeatable, read-write unless `:ro`. A destination at or under `/work` is refused: it would shadow part of what `-w` put there, which is a run reading the wrong files rather than one that fails. Read-only is rendered as `--mount type=bind,...,readonly` because `-v host:dest:ro` is Docker's spelling alone.
 
-`--dry-run` prints the `container run` command and exits. `--keep` leaves the container for inspection, and warns that `container inspect` then exposes the token.
+`--dry-run` prints the engine's `run` command and exits. `--keep` leaves the container for inspection, and warns that inspecting it then exposes the token.
 
 A run records the containers it owns, and its own pid, under `$XDG_STATE_HOME/sanduk/runs` (`~/.local/state` by default). Every run first deletes the containers of records whose owner process is gone. SIGKILL cannot be caught, so a killed run cannot delete its own container -- the next run does it, and until then the container is alive holding the run token. SIGTERM and SIGHUP are caught and tear down in place. `--keep` releases the record, so a container you asked to keep is never swept. A state directory that cannot be written stops the run before it starts.
 
@@ -364,11 +364,13 @@ Every container drops all Linux capabilities and runs under an init process. `--
 make sync             Resolve and install the environment
 make test             Fast suite: no containers, no API calls, no key needed
 make test-container   Integration suite: boots real containers
-make test-all         Both
+make test-live        Live provider suite: needs LLAMA_SERVER, or a provider key
+make test-agents      One real run per agent; spends money
+make test-all         Every suite; paid agent runs still need AGENT_LIVE=1
 make qa               lint-check, format-check, typecheck, test
 make image            Build the agent image if missing
-make image-rebuild    Force a rebuild
-make run              TASK='...' WORK=./dir ARGS='--effort max'
+make image-rebuild    Force a rebuild (`sanduk run -b` does the same)
+make run              TASK='...' WORK=./dir AGENT=minima ARGS='--model gpt-5.6-luna'
 make run-proxy        Same, sealed: no egress, key held on the host
 make shell            Interactive shell in the image
 make ps / make logs   Containers / recorded request bodies
@@ -383,13 +385,22 @@ make system-start / system-stop / system-status
 
 ## CI
 
-`.github/workflows/ci.yml` runs lint, format and types once, the fast suite across `ubuntu-latest` and `macos-latest` on the declared Python bounds, and the integration suite on Linux against a real Docker daemon. That last job is not redundancy: a native daemon puts the bridge on the host kernel, so it is the only place `--proxy` can be proved. Neither Apple's engine nor Docker Desktop can, and both are what you have locally.
+`.github/workflows/ci.yml` runs on every push to `main` and every pull request:
+
+- `qa`: lint, format and types, once.
+- `test`: the fast suite on `ubuntu-latest` and `macos-latest`, on Python 3.11 and 3.14.
+- `docker`: the integration suite on Linux against a real Docker daemon.
+- `gvisor`: the same suite with containers started by `runsc`.
+
+The `docker` job is the only place `--mode sealed` is proved. A native daemon puts the bridge on the host kernel; Apple's engine and Docker Desktop do not.
+
+`images` runs weekly and on manual dispatch. It builds every agent's image and asks the agent for its version, because pinned agent releases change their flags and output without a commit here.
 
 ## Testing
 
 The fast suite makes no API calls and needs no key: the relay is exercised against a local fake upstream, and the preflight is monkeypatched.
 
-The integration suite boots real VMs and proves the relay by the 401 an invalid key earns from the real endpoint, which is itself proof the request arrived.
+The integration suite boots real containers and proves the relay by the 401 an invalid key earns from the real endpoint, which is itself proof the request arrived.
 
 `make test-live` talks to real providers, and most of it costs nothing. The bad-key tests reach Anthropic, OpenAI, and OpenRouter with no credential at all, since refusing an invalid key needs no valid one. Point `LLAMA_SERVER` at a local `llama-server` and the whole openai-compat path runs for free.
 
@@ -407,11 +418,11 @@ make test-agents
 make test-agents ARGS='-k "minima or hax"'
 ```
 
-Nothing runs on its own. `pyproject.toml` deselects the container, live and agent suites, so `make test` is the only one that runs unasked.
+`pyproject.toml` deselects the container, live and agent suites, so `pytest` and `make test` run only the fast suite.
 
 ## Measured on this setup
 
-The per-agent rows are one task and one local model, counted by the relay through `--proxy`. What they compare is each agent's fixed prompt overhead, not the quality of its answer.
+The per-agent rows are one task and one local model, counted by the relay in a relayed mode. What they compare is each agent's fixed prompt overhead, not the quality of its answer.
 
 | | |
 | --- | --- |
@@ -436,7 +447,7 @@ The per-agent rows are one task and one local model, counted by the relay throug
 
 ## Known traps
 
-The macOS application firewall silently drops connections to a binary set to "Block incoming connections", so the agent's first API call hangs until `--timeout` rather than failing. Homebrew's Python is shipped blocked on at least one machine; uv's interpreters are signed and auto-allowed. `--proxy` runs a preflight that names the exact `socketfilterfw --unblockapp` command when it sees an explicit block. It cannot detect an interpreter that will merely prompt.
+The macOS application firewall silently drops connections to a binary set to "Block incoming connections", so the agent's first API call hangs until `--timeout` rather than failing. Homebrew's Python is shipped blocked on at least one machine; uv's interpreters are signed and auto-allowed. A relayed mode runs a preflight that names the exact `socketfilterfw --unblockapp` command when it sees an explicit block. It cannot detect an interpreter that will merely prompt.
 
 Apple's builder (`container` 1.2.0) can copy a directory as an empty one: `COPY dir/ dest/` did so in 5 of 5 clean builds unless the same build also copied a file by name. Recipes copy each file by name. A Containerfile of your own passed to `--containerfile` should too.
 

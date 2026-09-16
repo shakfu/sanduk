@@ -1,8 +1,8 @@
 # Surviving a host restart
 
-Status: investigated, 2026-09-09. Target: none. Recommendation is to do the cheap half and write the rest down.
+Status: investigated, 2026-09-09. Target: none. Recommendation is to do the cheap half and write the rest down. Of the cheap half, recording why a wakeup failed landed in 0.2.4 (`runs.error`); pinning the relay port has not.
 
-Scope: what it would take for a wakeup in flight to survive the death of the process that started it, the way nanoclaw's `adoptRunningSessions()` does. Nothing here is implemented.
+Scope: what it would take for a wakeup in flight to survive the death of the process that started it, the way nanoclaw's `adoptRunningSessions()` does.
 
 ## What dies today, and what does not
 

@@ -483,6 +483,22 @@ def test_force_rebuilds_an_existing_image(engine):
     assert [image for image, _ in engine.built] == [IMAGE]
 
 
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["run", "task", "-r", "claude-docs"],
+        ["build", "-r", "claude-docs"],
+        ["shell", "-r", "claude-docs"],
+        ["destroy", "-r", "claude-docs"],
+    ],
+    ids=lambda argv: argv[0],
+)
+def test_r_is_short_for_recipe(argv):
+    from sanduk.cli import parse_args
+
+    assert parse_args(argv).recipe == "claude-docs"
+
+
 def test_run_b_rebuilds_an_existing_image(engine, tmp_path):
     """`-b` is `--rebuild`: a run otherwise builds only a missing image."""
     from sanduk.cli import ensure_image, parse_args, select

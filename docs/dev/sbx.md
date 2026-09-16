@@ -18,7 +18,7 @@ Scope: whether sanduk should run agents through Docker Sandboxes ([docs](https:/
 
 - **Images:** templates must use `FROM docker/sandbox-templates:<variant>` and are pulled from a registry ([templates](https://docs.docker.com/ai/sandboxes/customize/templates/)).
 
-- **Agents:** Claude Code, Codex, Copilot, Cursor, Devin, Docker Agent, Droid, Gemini, Kiro, OpenCode, and a bare shell ([agents](https://docs.docker.com/ai/sandboxes/agents)). hax, hermes, pi and prime would each need a kit ([build an agent](https://docs.docker.com/ai/sandboxes/customize/build-an-agent/)).
+- **Agents:** Claude Code, Codex, Copilot, Cursor, Devin, Docker Agent, Droid, Gemini, Kiro, OpenCode, and a bare shell ([agents](https://docs.docker.com/ai/sandboxes/agents)). hax, hermes, minima, pi and prime would each need an sbx kit ([build an agent](https://docs.docker.com/ai/sandboxes/customize/build-an-agent/)).
 
 - **Requirements** ([install](https://docs.docker.com/ai/sandboxes/install/), [FAQ](https://docs.docker.com/ai/sandboxes/faq/)):
 
@@ -54,7 +54,7 @@ Poor. `Runtime.run_argv` renders the Docker CLI's `--network`, `--cap-drop`, `-v
 
 ## Options considered
 
-1. **sbx as the boundary, relay kept.** Bind the relay to `127.0.0.1:PORT`, allow only `localhost:PORT`, and remove the default rules. Keeps path, model and token policy. Costs: all seven Containerfiles rebased onto `sandbox-templates` and pushed to a registry; a Docker account; a relay any host process can reach, guarded only by the run token; a second run path.
+1. **sbx as the boundary, relay kept.** Bind the relay to `127.0.0.1:PORT`, allow only `localhost:PORT`, and remove the default rules. Keeps path, model and token policy. Costs: every recipe's `from` rebased onto `sandbox-templates` and pushed to a registry; a Docker account; a relay any host process can reach, guarded only by the run token; a second run path.
 
 2. **sbx policy, relay dropped.** Loses the path allowlist, model and token policy, body logs, and arbitrary `openai-compat` upstreams. sanduk would become a wrapper.
 

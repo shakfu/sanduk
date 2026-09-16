@@ -1,6 +1,6 @@
 # Docker Agent (`docker agent`)
 
-Status: investigated, 2026-09-16. Binary v1.140.0 run locally on darwin-arm64; source read at commit `5d959fa`. Nothing built into a sanduk image. Decision: do not add an eighth agent yet; use it to exercise kits and recipes first. Claims cite primary sources; inference is marked.
+Status: investigated, 2026-09-16. Binary v1.140.0 run locally on darwin-arm64; source read at commit `5d959fa`. Nothing built into a sanduk image. Decision: do not add it as an agent yet; use it to exercise kits and recipes first. Claims cite primary sources; inference is marked.
 
 Scope: whether docker-agent should join the `sanduk.agents` registry.
 
@@ -87,11 +87,11 @@ Its tool surface is declarative and closed. A config declaring `type: filesystem
 
 ## Options considered
 
-1. **Agent #8 now.** A hax-shaped handler, a recipe, one YAML file. Roughly a day. It widens a matrix that is already unmeasured: no agent task has used a kit, recipes are unexercised under Docker and on amd64, and no run has lasted longer than ~35s.
+1. **An agent now.** A hax-shaped handler, a recipe, one YAML file. Roughly a day. It widens a matrix that is already unmeasured: no agent task has used a kit, recipes are unexercised under Docker and on amd64, and no run has lasted longer than ~35s.
 
 2. **Kit and recipe proving ground first.** Build a kit installing an stdio MCP server, a recipe pinning it, and a config whose `toolsets` name it. This closes the open "agent task that uses a kit" item with the one agent whose tool surface a recipe can pin end to end. The agent slot follows if the image cost and the sealed run hold up.
 
-3. **Not integrated.** Seven agents already cover all four providers. hax alone reaches both wire protocols.
+3. **Not integrated.** The shipped agents already cover all four providers.
 
 Chosen: 2.
 

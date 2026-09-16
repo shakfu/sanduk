@@ -1,6 +1,6 @@
 # Subcommand CLI implementation plan
 
-Status: done, 2026-09-08. Target: 0.2.0. All three commits landed; the Makefile names no engine.
+Status: done, 2026-09-08. Target: 0.2.0. All three commits landed; the Makefile names no engine. The command and flag tables reflect 0.2.0; `sanduk <command> --help` is current.
 
 Scope: `sanduk` grows subcommands, and every container-engine call the Makefile makes in shell moves behind `Runtime`. No change to what `run` does or to any flag it takes.
 

@@ -99,7 +99,8 @@ class Runtime:
     # or Kata in place of runc. See docs/dev/microvms.md.
     takes_oci_runtime = False
     # vmnet-style engines only create the host bridge while a container is
-    # attached; Docker and Podman create it with the network.
+    # attached; Docker creates it with the network. Podman's netavark does not
+    # (docs/dev/podman.md).
     needs_network_holder = False
     # Appended when the relay cannot bind the gateway, where an engine knows a
     # likely reason. --proxy is the whole point of sanduk, so a failure there

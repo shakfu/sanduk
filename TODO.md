@@ -12,8 +12,6 @@ Ordered by how much they would change a decision, not by effort.
 
 ### Priority
 
-- [ ] change default cloud provider to openai and model to openai-5.6-luna
-
 - [ ] **Trial shell-output compressors with claude: none, rtk, snip.** Run one task through `--agent claude --provider anthropic --mode sealed` in three images: stock, with [rtk](https://github.com/rtk-ai/rtk), and with [snip](https://github.com/edouard-claude/snip). Both install a Claude Code PreToolUse hook. Build the two variants as kits: a pinned `binary` tool, `hook: true`, and a claude `setup` running the global `init`. Pick a test- and git-heavy task; neither tool shrinks file reads, so a review task shows little. Run each arm 3 times with a fixed `--model`, `--stats-file` and `--log-bodies`.
 
   Compare cost per arm. The relay prices nothing for Anthropic, and `--budget` is refused there. Two figures, which should agree:
@@ -37,15 +35,13 @@ Ordered by how much they would change a decision, not by effort.
 
 ### Untested
 
-- [ ] **Other sandboxes: decide or prune.** Both candidates were investigated and declined: docker sbx adds a boundary only on Linux ([docs/dev/sbx.md](docs/dev/sbx.md)), and NVIDIA OpenShell duplicates the relay's credential boundary or replaces it, costing `--allow-model`, `--max-tokens-cap`, `--budget` and `--log-bodies` ([docs/dev/openshell.md](docs/dev/openshell.md)). Nothing is open unless a new candidate appears; delete this entry otherwise.
-
 - [ ] **Kata Containers under `--oci-runtime`.** A VM per container on Linux, where Docker otherwise shares the host kernel. Measure `sealed` mode (the relay on the host gateway), `/work` under Cloud Hypervisor or QEMU, and Firecracker's lack of filesystem sharing. Needs KVM; standard GitHub runners may not expose it. See [docs/dev/microvms.md](docs/dev/microvms.md).
 
-- [ ] **Recipes under Docker and on amd64.** Every recipe was built and run on Apple's `container` 1.2.0, arm64 only. The uid build args, the amd64 artifacts and `docker image ls` in `destroy` are unexercised. The scheduled `images` CI job covers the agents; nothing builds `claude-docs`.
+- [ ] **Recipes under Docker and on amd64.** Every recipe was built and run on Apple's `container` 1.2.0, arm64. Under Docker on amd64, only hax's recipe is built, by the `docker` and `gvisor` jobs on every push; that covers the uid build args and one amd64 artifact. The scheduled `images` job covers the other agents but has not run since recipes landed. `docker image ls` in `destroy` is unexercised, and nothing builds `claude-docs`.
 
 - [ ] **An agent task that uses a kit.** d2 and officecli ran inside `claude-docs`, but no agent has been given a task that needs them, in `sealed` or otherwise. Also measure what installed skills cost: one task with and without `--kit docs`, comparing the relay log's per-call `in=` counts.
 
-- [ ] **docker-agent as a kit and recipe target.** Its `toolsets` list is declarative and closed, so a recipe can pin the whole tool surface: a kit installing an stdio MCP server, a recipe pinning it, a config naming it. No other agent allows that; the rest fix their tools in the binary. `--exec --json` and `base_url: ${OPENAI_BASE_URL}` both hold against a stub, and the call is `POST /v1/chat/completions`, already on the relay's route table. Three measurements gate an eighth agent slot: whether `selfupdate` or `toolinstall` fires before the first completion, which decides `sealed`; the layer cost of a 126 MiB binary; and the Anthropic endpoint end to end. See [docs/dev/docker-agent.md](docs/dev/docker-agent.md).
+- [ ] **docker-agent as a kit and recipe target.** Its `toolsets` list is declarative and closed, so a recipe can pin the whole tool surface: a kit installing an stdio MCP server, a recipe pinning it, a config naming it. No other agent allows that; the rest fix their tools in the binary. `--exec --json` and `base_url: ${OPENAI_BASE_URL}` both hold against a stub, and the call is `POST /v1/chat/completions`, already on the relay's route table. Three measurements gate another agent slot: whether `selfupdate` or `toolinstall` fires before the first completion, which decides `sealed`; the layer cost of a 126 MiB binary; and the Anthropic endpoint end to end. See [docs/dev/docker-agent.md](docs/dev/docker-agent.md).
 
 - [ ] **Where prime reads skills.** Its handler has no `skills_dir`, so kits with skills are refused for it. pi reads `~/.agents/skills`; whether PrimeIntellect's build does is not measured.
 
@@ -55,9 +51,9 @@ Ordered by how much they would change a decision, not by effort.
 
 - [ ] **Each provider's route table is the paths one workload was seen to use.** A different task (web search, subagents, MCP) may call something else and get a 403. The failure is legible in the proxy log, but the fix is manual: `--proxy-allow-path`.
 
-- [ ] **OpenAI's `/v1/responses` has not been checked against a real response.** codex speaks it, but the cap field and usage names come from the documentation.
+- [ ] **`--max-tokens-cap` on OpenAI's `/v1/responses` is unchecked.** Usage has been read from real Responses streams (codex and minima through the relay), but clamping `max_output_tokens` has not been tried against a real request.
 
-- [ ] **OpenAI completions are untested.** The bad-key path is covered live; a real completion needs a key and a model id, and none has been run. OpenRouter's have, through the 0.2.3 budget work.
+- [ ] **OpenAI Chat Completions has no recorded live run.** Responses has run live through codex (`make test-agents`) and minima. `make test-live` runs a Chat Completions call only with `OPENAI_MODEL` set, and no result is recorded.
 
 - [ ] **`stream_usage_option` is a guess for any openai-compatible server but llama.cpp.** Measured there, both directions: no field means no streamed usage, the field means full counts. A stricter server could reject it outright, and nothing has tried one.
 
@@ -67,8 +63,6 @@ Ordered by how much they would change a decision, not by effort.
 
 - [ ] **A timed-out run records no token count.** The reader's partial tally is discarded with the kill.
 
-- [ ] **The README contradicts itself on CI.** One section describes `.github/workflows/ci.yml`; a later one says there is no CI. `providers.py` still opens "Only Anthropic is implemented" above four `Provider` rows.
-
 ### Design
 
 - [ ] **`sanduk-logs` grows without bound.** No rotation, no cap.
@@ -77,15 +71,15 @@ Ordered by how much they would change a decision, not by effort.
 
 - [ ] **Kits waiting to ship.** `rtk` and `snip` wait for the compressor trial above. `quarto` needs a decision: offline Typst PDF only, or a larger kit with TinyTeX preinstalled, since LaTeX PDF fetches packages at run time. See [docs/dev/kits.md](docs/dev/kits.md).
 
-- [ ] **Whether `key-safe` still has a use case.** It exists for `npm install`, `pip install` and `git clone` during a run; recipes now put dependencies in the image, where a `sealed` run fetches nothing. Census what is left: the kits declaring `egress`, which `check_kits` already refuses under `sealed`, and whether a real task needs the network during the run rather than at build. If little remains, `key-safe` is a compatibility mode to document rather than harden, and OpenShell's TLS-terminating egress policy never earns its cost ([docs/dev/openshell.md](docs/dev/openshell.md)). Independent of the outcome: the README table says `key-safe` leaves egress unrestricted and unlogged, and the run says nothing.
+- [ ] **Whether `key-safe` still has a use case.** It exists for `npm install`, `pip install` and `git clone` during a run; recipes now put dependencies in the image, where a `sealed` run fetches nothing. Census what is left: the kits declaring `egress`, which `check_kits` already refuses under `sealed`, and whether a real task needs the network during the run rather than at build. If little remains, `key-safe` is a compatibility mode to document rather than harden, and OpenShell's TLS-terminating egress policy never earns its cost ([docs/dev/openshell.md](docs/dev/openshell.md)).
 
 ## Low
 
 ### Design
 
-- [ ] **`--effort`, `--bare` and `--permission-mode` are Claude Code's flags on the shared parser.** claude and hax read them; the other six do not. A `--` passthrough is the cheaper shape.
+- [ ] **`--effort`, `--bare` and `--permission-mode` are Claude Code's flags on the shared parser.** claude and hax read some of them, minima refuses them, and the other five ignore them. A `--` passthrough is the cheaper shape.
 
-- [ ] **The placeholder container costs a VM boot and 256MB** for the duration of every relayed run (`key-safe`, `sealed`), purely so the bridge exists before the relay binds. Worth checking whether a shorter-lived container or a retrying bind would do.
+- [ ] **The placeholder container costs a VM boot and 256MB** for the duration of every relayed run (`key-safe`, `sealed`) on Apple's `container`, purely so the bridge exists before the relay binds. Worth checking whether a shorter-lived container or a retrying bind would do.
 
 - [ ] **No container reuse.** Every run pays a fresh VM boot. Fine for the experiment; wrong if this ever runs in a loop.
 

@@ -24,7 +24,7 @@ Rootless is Podman's default and its main use. The host-bound relay covers the l
 
 It would subclass `Docker`. Six differences:
 
-1. **A network holder.** netavark creates the bridge and its gateway address when the first container attaches, and deletes both when the last leaves ([bridge.rs](https://github.com/containers/netavark/blob/main/src/network/bridge.rs), [podman#17844](https://github.com/containers/podman/issues/17844)). That is Apple's behaviour, not Docker's. The comment at `runtime.py:92` says Podman creates the bridge with the network; it is wrong.
+1. **A network holder.** netavark creates the bridge and its gateway address when the first container attaches, and deletes both when the last leaves ([bridge.rs](https://github.com/containers/netavark/blob/main/src/network/bridge.rs), [podman#17844](https://github.com/containers/podman/issues/17844)). That is Apple's behaviour, not Docker's. The comment in `runtime.py` said Podman creates the bridge with the network; that was wrong, and the comment now says so.
 
 2. **`network_info`** reads `[0].subnets[0].gateway` and `[0].subnets[0].subnet` ([podman-network-inspect](https://docs.podman.io/en/latest/markdown/podman-network-inspect.1.html)).
 
@@ -32,7 +32,7 @@ It would subclass `Docker`. Six differences:
 
 4. **Rootless detection**, so a relayed mode is refused at the flag. Today it would fail after `wait_for_gateway`'s 30s. The field is probably `{{.Host.Security.Rootless}}`; not confirmed.
 
-5. **A uid mapping for `/work`.** Rootless maps container root to the caller, and uid 1000 to a subordinate uid. Every shipped image runs its agent as uid 1000, so the agent cannot write the mount (inference, from [userns](https://github.com/containers/podman/blob/main/docs/source/markdown/options/userns.container.md) and [troubleshooting #34](https://github.com/containers/podman/blob/main/troubleshooting.md)). `--userns=keep-id:uid=1000,gid=1000` maps the caller to 1000; it needs Podman 4.3 ([RELEASE_NOTES](https://github.com/containers/podman/blob/main/RELEASE_NOTES.md)).
+5. **A uid mapping for `/work`.** Rootless maps container root to the caller, and uid 1000 to a subordinate uid. Every shipped image runs its agent as uid 1000 by default (Docker builds substitute the caller's uid; see below), so the agent cannot write the mount (inference, from [userns](https://github.com/containers/podman/blob/main/docs/source/markdown/options/userns.container.md) and [troubleshooting #34](https://github.com/containers/podman/blob/main/troubleshooting.md)). `--userns=keep-id:uid=1000,gid=1000` maps the caller to 1000; it needs Podman 4.3 ([RELEASE_NOTES](https://github.com/containers/podman/blob/main/RELEASE_NOTES.md)).
 
 6. **SELinux labels** on Fedora and RHEL. The docs warn an unlabelled bind mount may be refused ([volume.md](https://github.com/containers/podman/blob/main/docs/source/markdown/options/volume.md)). Both fixes cost something ([mount.md](https://github.com/containers/podman/blob/main/docs/source/markdown/options/mount.md)):
 
@@ -90,4 +90,4 @@ If Podman is wanted, C is the version worth building. It is a decision about whe
 
 Confirmed by CI from v0.2.4 on. `test_the_workdir_mount_carries_files_both_ways` failed under Docker and runsc with `cat: in.txt: Permission denied`. The agent ran as uid 1000; pytest's `tmp_path` is mode 0700 and owned by the runner user.
 
-Fixed by building the image as the caller: `Docker.build_image` passes `AGENT_UID` and `AGENT_GID`. `--user` at run time was rejected: `$HOME` stays owned by 1000, and prime bakes its kernel and tools there. Root builds keep 1000. An image built by one user still fails for another user whose uid differs; `run` refuses that case up front, from the `sanduk.agent-uid` label.
+Fixed by building the image as the caller: `Docker.build_args` passes `AGENT_UID` and `AGENT_GID`. `--user` at run time was rejected: `$HOME` stays owned by 1000, and prime bakes its kernel and tools there. Root builds keep 1000. An image built by one user still fails for another user whose uid differs; `run` refuses that case up front, from the `sanduk.agent-uid` label.

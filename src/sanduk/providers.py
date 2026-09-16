@@ -10,8 +10,7 @@ OpenAI Responses both report `input_tokens` and `output_tokens`, so a sniffer
 reading field names alone cannot tell them apart. `Provider.routes` declares it
 per path instead.
 
-Only Anthropic is implemented. A second provider is a `Provider` row and a
-`PROVIDERS` entry.
+A new provider is a `Provider` row and a `PROVIDERS` entry.
 """
 
 from __future__ import annotations

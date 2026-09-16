@@ -95,7 +95,7 @@ Against sanduk:
 
 ## Constraints for any image integration
 
-- **Install at build time.** `sealed` has no route off the host, so nothing can be fetched at run time. Pin a release binary by checksum, as `Containerfile.prime` does. Do not use `curl | sh`.
+- **Install at build time.** `sealed` has no route off the host, so nothing can be fetched at run time. Pin a release binary by checksum, as the `hax` and `minima` recipes' `binary` sections do. Do not use `curl | sh`.
 
 - **Use the global install only.** `rtk init -g` and `snip init --agent codex` write under `$HOME` in the image. Project-scoped modes write `AGENTS.md`, `.clinerules` or `.windsurfrules` into `/work`.
 
@@ -123,7 +123,7 @@ Chosen: 5, then a three-arm trial with claude, the one agent both tools hook nat
 
 Tracked in [TODO.md](../../TODO.md): one task through `--agent claude --provider anthropic`, in a stock image, an rtk image and a snip image, 3 runs each. Cost comes from Claude Code's `total_cost_usd` and from the relay log's per-call counts priced at list rates. The stats line folds cache writes into `in`, so it cannot price a run alone. Codex stays out until its hook rewriting is confirmed (below).
 
-Alternative: the larger costs in the baseline are file reads and context re-sent on every call. Model choice and narrower `--mount` scopes act on those directly, as does `--max-turns` for claude, hax and hermes; codex ignores it.
+Alternative: the larger costs in the baseline are file reads and context re-sent on every call. Model choice and narrower `--mount` scopes act on those directly, as does `--max-turns` for claude, hax, hermes and minima; codex ignores it.
 
 ## Unresolved
 

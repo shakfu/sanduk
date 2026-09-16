@@ -4,8 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
-  # The agent images are the only thing here that rots without a commit: four
-  # pinned npm versions and a static binary, whose flags and JSON records
+  # The agent images are the only thing here that rots without a commit: pinned
+  # npm and pip packages and release binaries, whose flags and JSON records
   # change under us. Weekly, and on demand.
   schedule:
     - cron: "0 7 * * 1"

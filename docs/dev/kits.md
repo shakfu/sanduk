@@ -1,6 +1,6 @@
 # Kits and recipes
 
-Status: implemented 2026-09-15. The seven agent images and `claude-docs` were built with Apple's `container` 1.2.0; see [Verification](#verification). Not shipped: the `rtk`, `snip` and `quarto` kits. Tool and agent facts come from each project's docs and source on its default branch. start-vm facts come from [shakfu/start-vm](https://github.com/shakfu/start-vm) at `d8de8c7`. Inference is marked; unverified claims say UNCONFIRMED.
+Status: implemented 2026-09-15. minima's recipe was added on 2026-09-16. The seven agent images of the time and `claude-docs` were built with Apple's `container` 1.2.0; see [Verification](#verification). Not shipped: the `rtk`, `snip` and `quarto` kits. Tool and agent facts come from each project's docs and source on its default branch. start-vm facts come from [shakfu/start-vm](https://github.com/shakfu/start-vm) at `d8de8c7`. Inference is marked; unverified claims say UNCONFIRMED.
 
 Scope: JSON files that describe an agent image (recipes) and reusable bundles of tools and skills that recipes include by name (kits).
 
@@ -25,7 +25,7 @@ Before this, each agent had one hand-written Containerfile, and `--containerfile
 
 - **Checks before a run.** Refuse a kit that needs egress under `sealed`, or a hook kit under `--allowed-tools`.
 
-- **One copy of the invariants.** All 7 Containerfiles repeat the `AGENT_UID` block. A renderer emits it once.
+- **One copy of the invariants.** The 7 hand-written Containerfiles repeated the `AGENT_UID` block. A renderer emits it once.
 
 - **A catalogue.** `sanduk list kits` and `sanduk list recipes`.
 
@@ -56,7 +56,7 @@ Decided: JSON for both kits and recipes. TOML only if it serves both; one format
 
 What JSON costs here:
 
-- **No comments.** The shipped Containerfiles keep their rationale in comments, e.g. why `Containerfile.prime` builds a Python kernel. In JSON, rationale moves to `description` fields, to copied script files, or to `docs/dev/`.
+- **No comments.** The hand-written Containerfiles kept their rationale in comments, e.g. why `Containerfile.prime` built a Python kernel. In JSON, rationale moves to `description` fields, to copied script files, or to `docs/dev/`.
 
 - **Shell in strings.** `run` takes an array of lines; anything longer goes in a copied script.
 
@@ -423,11 +423,11 @@ Checked before the build, alongside `Agent.check()`:
 
 3. **Run-time read-only mounts.** The host verifies Linux binaries into a cache and mounts tools and skills read-only. No rebuild per combination, and the agent cannot edit them. Cannot handle `apt`, `npm`, `pip` or hooks that edit agent config. Nested mounts under `$HOME` on Apple's engine are UNCONFIRMED.
 
-4. **Claude Code plugins as the unit.** They bundle skills, hooks, MCP servers and `bin/` ([plugins-reference](https://code.claude.com/docs/en/plugins-reference)). They serve one agent of seven.
+4. **Claude Code plugins as the unit.** They bundle skills, hooks, MCP servers and `bin/` ([plugins-reference](https://code.claude.com/docs/en/plugins-reference)). They serve one agent of eight.
 
 ## What was built
 
-All five planned stages, as mechanism: recipes with inheritance and `remove`, every section type, kits with pins, skills, `setup`, `provides` and `hook`, lookup, refusals, `list recipes`, `list kits`, `build --dry-run`, and `recipe` in `assistant.toml`. Shipped: recipes for the seven agents, `claude-docs`, and the `docs` kit.
+All five planned stages, as mechanism: recipes with inheritance and `remove`, every section type, kits with pins, skills, `setup`, `provides` and `hook`, lookup, refusals, `list recipes`, `list kits`, `build --dry-run`, and `recipe` in `assistant.toml`. Shipped: recipes for the seven agents, `claude-docs`, and the `docs` kit. minima's recipe, added later, is not in the verification below.
 
 Not shipped: the `rtk` and `snip` kits, which wait for the TODO trial, and `quarto`, which waits for the Typst-or-TinyTeX decision.
 

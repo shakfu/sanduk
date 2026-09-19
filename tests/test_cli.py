@@ -5,8 +5,10 @@ Every run here is a --dry-run: nothing is built and nothing is started.
 """
 
 import argparse
+import contextlib
 import json
 import os
+import sqlite3
 from types import SimpleNamespace
 
 import pytest
@@ -14,6 +16,7 @@ import pytest
 from sanduk import assistants
 from sanduk.agent import REPORT_NAME, Outcome
 from sanduk.cli import (
+    COMMAND_FUNCS,
     MAX_TIMEOUT,
     _collect_report,
     agent_stats,
@@ -744,10 +747,11 @@ def test_an_empty_outbox_and_history_are_not_errors(assistant_dir, capsys):
 
 
 def test_runs_says_why_a_wakeup_failed(assistant_dir, capsys):
-    assistants.connect().execute(
-        "INSERT INTO runs (name, started_at, ended_at, exit_code, error) "
-        "VALUES ('triage', 1, 121, 124, 'agent exceeded --timeout 120s')"
-    )
+    with contextlib.closing(assistants.connect()) as db:
+        db.execute(
+            "INSERT INTO runs (name, started_at, ended_at, exit_code, error) "
+            "VALUES ('triage', 1, 121, 124, 'agent exceeded --timeout 120s')"
+        )
     assert main(["runs"]) == 0
     assert "agent exceeded --timeout 120s" in capsys.readouterr().out
 
@@ -925,12 +929,12 @@ def test_an_extra_mount_reaches_the_container_argv(tmp_path, capsys):
 def test_approve_and_reject_name_what_they_changed(assistant_dir, capsys):
     """Ids come from the outbox listing, so both verbs take numbers."""
     main(["assistant", "add", str(assistant_dir)])
-    db = __import__("sanduk.assistants", fromlist=["x"]).connect()
-    db.execute(
-        "INSERT INTO outbox (name, run_id, created_at, body) VALUES "
-        "('triage', 1, 1, 'first'), ('triage', 1, 2, 'second')"
-    )
-    db.execute("UPDATE outbox SET approved_at = NULL")
+    with contextlib.closing(assistants.connect()) as db:
+        db.execute(
+            "INSERT INTO outbox (name, run_id, created_at, body) VALUES "
+            "('triage', 1, 1, 'first'), ('triage', 1, 2, 'second')"
+        )
+        db.execute("UPDATE outbox SET approved_at = NULL")
     assert main(["approve", "1"]) == 0
     assert main(["reject", "2"]) == 0
     assert main(["outbox"]) == 0
@@ -942,11 +946,11 @@ def test_approve_and_reject_name_what_they_changed(assistant_dir, capsys):
 
 def test_approving_something_already_decided_says_so(assistant_dir, capsys):
     main(["assistant", "add", str(assistant_dir)])
-    db = __import__("sanduk.assistants", fromlist=["x"]).connect()
-    db.execute(
-        "INSERT INTO outbox (name, run_id, created_at, body, approved_at) VALUES "
-        "('triage', 1, 1, 'first', 5)"
-    )
+    with contextlib.closing(assistants.connect()) as db:
+        db.execute(
+            "INSERT INTO outbox (name, run_id, created_at, body, approved_at) VALUES "
+            "('triage', 1, 1, 'first', 5)"
+        )
     assert main(["approve", "1"]) == 0
     assert "already" in capsys.readouterr().err
 
@@ -1170,3 +1174,137 @@ def test_a_zero_the_relay_confirms_is_kept():
     """openrouter/free reports its cost, and the cost is zero."""
     stats = "10 in / 2 out, $0.0000"
     assert agent_stats(stats, relay_that_spent(0.0)) == stats
+
+
+# --- where the request-body log lands ---------------------------------------
+
+
+def test_a_log_dir_inside_the_workspace_is_refused(tmp_path, capsys):
+    """The bodies are the record of what the agent sent. --log-dir is
+    documented as being outside the mount; `-w .` put the default inside it."""
+    argv = ["run", "task", "-w", str(tmp_path), "--log-bodies"]
+    argv += ["--log-dir", str(tmp_path / "logs"), "--dry-run"]
+    assert main(argv) == 2
+    assert "could read and edit the bodies it sent" in capsys.readouterr().err
+
+
+def test_a_log_dir_inside_a_mount_is_refused(tmp_path, capsys):
+    """--mount is the same exposure by another flag."""
+    extra = tmp_path / "extra"
+    extra.mkdir()
+    argv = ["run", "task", "-w", str(tmp_path / "w"), "--mount", f"{extra}:/extra"]
+    argv += ["--log-bodies", "--log-dir", str(extra / "logs"), "--dry-run"]
+    assert main(argv) == 2
+    assert "--mount puts in the container" in capsys.readouterr().err
+
+
+def test_a_log_dir_outside_every_mount_is_allowed(tmp_path):
+    argv = ["run", "task", "-w", str(tmp_path / "w"), "--log-bodies"]
+    argv += ["--log-dir", str(tmp_path / "logs"), "--dry-run"]
+    assert main(argv) == 0
+
+
+def test_a_bad_mount_is_refused_before_the_holder_starts(tmp_path, monkeypatch):
+    """Mounts were parsed in build_spec, which runs after the holder is up and
+    the relay is bound; the AgentboxError left both behind."""
+    held = []
+
+    class Engine(StubEngine):
+        gateway_hint = ""
+
+        def ensure_network(self, name, internal=True):
+            return "10.0.0.1", "10.0.0.0/24"
+
+        def hold_network_up(self, network, image, seconds=None):
+            held.append(network)
+            return "sanduk-hold-0000"
+
+    monkeypatch.setattr("sanduk.cli.get_runtime", lambda _: Engine())
+    argv = ["run", "task", "-w", str(tmp_path), "--mode", "sealed", "--skip-key-check"]
+    assert main([*argv, "--mount", "/nosuchdir:/extra"]) == 2
+    assert held == []
+    assert list(runs_dir().glob("*.json")) == []
+
+
+def test_a_failed_start_gives_back_the_holder_and_the_relay(tmp_path, monkeypatch):
+    """Anything raised between the relay binding and the run's own try/finally
+    used to leave the holder running and the relay on the bridge."""
+    stopped = []
+
+    class Relay:
+        cfg = SimpleNamespace(requests=0, rejected=0, spent=0.0, provider=get_provider())
+
+        def shutdown(self):
+            stopped.append("relay")
+
+    class Engine(StubEngine):
+        gateway_hint = ""
+
+        def ensure_network(self, name, internal=True):
+            return "10.0.0.1", "10.0.0.0/24"
+
+        def hold_network_up(self, network, image, seconds=None):
+            return "sanduk-hold-0000"
+
+        def run_argv(self, spec):
+            raise AgentboxError("the engine refused the spec")
+
+    engine = Engine()
+    monkeypatch.setattr("sanduk.cli.get_runtime", lambda _: engine)
+    monkeypatch.setattr("sanduk.cli.wait_for_gateway", lambda gateway, **kw: True)
+    monkeypatch.setattr("sanduk.cli._start_relay", lambda *a, **kw: (Relay(), 8080))
+    argv = ["run", "task", "-w", str(tmp_path), "--mode", "sealed", "--skip-key-check"]
+    assert main(argv) == 2
+    assert stopped == ["relay"]
+    assert "sanduk-hold-0000" in engine.destroyed
+    assert list(runs_dir().glob("*.json")) == []
+
+
+# --- what main turns into an exit code --------------------------------------
+
+
+@pytest.mark.parametrize(
+    "error",
+    [OSError(13, "Permission denied"), sqlite3.OperationalError("database is locked")],
+)
+def test_an_operational_error_is_a_line_not_a_traceback(monkeypatch, capsys, error):
+    """A state directory that will not mkdir, a database on a full disk. Library
+    code raises these where AgentboxError would say nothing more, and they left
+    the caller of a CLI reading a traceback."""
+
+    def boom(args):
+        raise error
+
+    monkeypatch.setitem(COMMAND_FUNCS, "ps", boom)
+    assert main(["ps"]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("sanduk: ")
+    assert type(error).__name__ in err
+
+
+def test_a_bug_keeps_its_traceback(monkeypatch):
+    """Catching everything would hide the failures that are sanduk's own."""
+
+    def boom(args):
+        raise AssertionError("this is a bug")
+
+    monkeypatch.setitem(COMMAND_FUNCS, "ps", boom)
+    with pytest.raises(AssertionError):
+        main(["ps"])
+
+
+def test_a_sealed_run_refuses_the_routable_mode_default_network(capsys):
+    """ensure_network reuses a network by name, and only Docker reports whether
+    it has a route off the host. Crossing the mode defaults is caught here."""
+    with pytest.raises(AgentboxError, match="default network for --mode key-safe"):
+        parse_args(["run", "task", "--mode", "sealed", "--proxy-network", "sanduk-open"])
+
+
+def test_a_key_safe_run_refuses_the_sealed_default_network():
+    with pytest.raises(AgentboxError, match="default network for --mode sealed"):
+        parse_args(["run", "task", "--mode", "key-safe", "--proxy-network", "sanduk-net"])
+
+
+def test_a_network_of_the_caller_s_own_is_allowed():
+    args = parse_args(["run", "t", "--mode", "sealed", "--proxy-network", "mine"])
+    assert args.proxy_network == "mine"

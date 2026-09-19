@@ -6,24 +6,30 @@
 #   make run TASK='Find the slowest test' WORK=../myrepo ARGS='--effort max'
 
 PKG     ?= sanduk
-AGENT   ?= codex
-RUNTIME ?=
-IMAGE   ?=
-NETWORK ?= sanduk-net
-WORK    ?= ./work
-TASK    ?= Summarise every Python file here.
+# Plain `=`, not `?=`: the command line still wins, and the shell environment
+# no longer does. AGENT, IMAGE, NETWORK and TASK are names another tool can
+# already hold -- an exported AGENT=1 picked an agent no registry has.
+AGENT   = codex
+RUNTIME =
+IMAGE   =
+NETWORK = sanduk-net
+WORK    = ./work
+TASK    = Summarise every Python file here.
 ARGS    ?=
 UV      ?= uv
 RUN     ?= $(UV) run
 
-# The integration suite reads these to pick what it boots. IMAGE is exported
+# The integration suite reads these to pick what it boots, under sanduk's own
+# names so nothing else's AGENT or IMAGE selects it. SANDUK_IMAGE is exported
 # only when set, so the suite falls back to the handler's own image rather than
 # a name this file would have to keep in step with the registry.
-export AGENT RUNTIME NETWORK
+export SANDUK_AGENT   = $(AGENT)
+export SANDUK_RUNTIME = $(RUNTIME)
+export SANDUK_NETWORK = $(NETWORK)
 # Empty RUNTIME lets sanduk pick the first engine installed for this platform.
 RUNTIME_FLAG = $(if $(RUNTIME),--runtime $(RUNTIME))
 ifneq ($(IMAGE),)
-export IMAGE
+export SANDUK_IMAGE = $(IMAGE)
 endif
 
 .DEFAULT_GOAL := help

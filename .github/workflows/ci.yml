@@ -102,10 +102,10 @@ jobs:
 
       - name: Integration suite under runsc
         env:
-          RUNTIME: docker
-          AGENT: hax
-          NETWORK: sanduk-ci
-          OCI_RUNTIME: runsc
+          SANDUK_RUNTIME: docker
+          SANDUK_AGENT: hax
+          SANDUK_NETWORK: sanduk-ci
+          SANDUK_OCI_RUNTIME: runsc
         run: uv run pytest -q -m container
 
       - name: Tear down
@@ -134,6 +134,6 @@ jobs:
 
       - name: The image runs its agent
         env:
-          RUNTIME: docker
-          AGENT: ${{ matrix.agent }}
+          SANDUK_RUNTIME: docker
+          SANDUK_AGENT: ${{ matrix.agent }}
         run: uv run pytest -q -m container -k runs_its_agent

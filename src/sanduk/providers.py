@@ -275,8 +275,15 @@ def parse_upstream(url: str, insecure: bool = False) -> tuple[str, str]:
 
 
 def get_provider(name: str = DEFAULT_PROVIDER) -> Provider:
+    """The provider named, raising as every other registry lookup here does.
+
+    `--provider` is an argparse choice, so the CLI never reaches this. Callers
+    that are not the CLI do -- an agent handler, a test, `sanduk.providers`
+    used as a library -- and a KeyError there escaped `cli.main` as a
+    traceback while `get_agent` and `get_runtime` printed a line.
+    """
     try:
         return PROVIDERS[name]
     except KeyError:
         known = ", ".join(sorted(PROVIDERS))
-        raise KeyError(f"unknown provider {name!r}; known: {known}") from None
+        raise AgentboxError(f"unknown provider {name!r}; known: {known}") from None

@@ -2,6 +2,28 @@
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+## [0.3.1]
+
+### Fixed
+
+- `runs.sweep` no longer deletes the record of a container it did not destroy. Both engines' `list_containers` returned `[]` when the CLI exited non-zero, so a stopped daemon read as "the engine holds none of these" and every orphan's record was unlinked with the container still running -- under `open`, still holding the API key. `list_containers` now raises, which `sweep` already handled; only its stub engine ever did. Raising also means `ps`, `stop` and `clean` say why the engine could not answer instead of printing "no sanduk containers".
+
+- A run that fails between the relay binding and the container starting gives back the holder, the relay and the run record. An invalid `--mount` was the reachable case: mounts were parsed in `build_spec`, which runs after `hold_network_up` and `_start_relay`, so the refusal left a holder container on the host and a socket on the bridge gateway. Mounts are now parsed before anything is started, and the whole pre-launch span tears down what it took.
+
+- `--log-dir` inside `-w` or a `--mount` is refused. The flag is documented as being outside the bind mount, because the request bodies are the record of what the agent sent, but the default is relative to the caller's directory: `sanduk run -w . --log-bodies` put `./sanduk-logs` inside `/work`, where the agent could edit its own audit trail. Body files are also opened `O_EXCL | O_NOFOLLOW` now, as the report already was.
+
+- A `sealed` run refuses a network that has a route off the host. `ensure_network` reuses a network by name and checked only that it existed, so a `key-safe` bridge under the name a sealed run asked for gave that run egress. Docker reports `Internal`, so reuse is verified there; Apple's engine does not, so `--proxy-network` naming the other mode's default (`sanduk-open` for `sealed`, `sanduk-net` for `key-safe`) is refused before any engine is asked.
+
+- `serve` survives a failed pass, and `tick` survives one assistant. An `OSError`, `sqlite3.Error` or `AgentboxError` from a pass ended the daemon a launchd or systemd unit supervises; an `assistant.toml` moved since it was registered skipped every other assistant due in the same pass. `cli.main` also turns `OSError` and `sqlite3.Error` into a line and exit 2 rather than a traceback, and `get_provider` raises `AgentboxError` as `get_agent` and `get_runtime` do.
+
+- Concurrent wakeups no longer share one stats file. `wake` wrote `wakeup.json` at a fixed path and unlinked it before each run, so two `serve` loops waking different assistants raced: one deleted the file the other was about to read, and that wakeup recorded no token line. The name now carries the run id, and the file is deleted once read.
+
+- Every `assistant`, `tell`, `tick`, `serve`, `outbox`, `approve`, `reject` and `runs` closes its SQLite connection. `make coverage` reported 71 `ResourceWarning: unclosed database`.
+
+- The integration suite reads `SANDUK_AGENT`, `SANDUK_RUNTIME`, `SANDUK_IMAGE`, `SANDUK_NETWORK` and `SANDUK_OCI_RUNTIME`. It resolved the agent at import, so an unrelated `AGENT=1` in the environment aborted collection for the whole suite, including the tests the `container` marker deselects -- `make test` failed with `unknown agent '1'`. The Makefile's `AGENT`, `IMAGE`, `NETWORK`, `RUNTIME`, `TASK` and `WORK` are assigned with `=` rather than `?=`, so `make run AGENT=claude` still works and an exported `AGENT` no longer picks what runs.
+
 ## [0.3.0]
 
 ### Added
@@ -134,7 +156,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 - The variable carrying an agent's generated config is `SANDUK_MODELS_JSON` rather than `SANDUK_PI_MODELS`: two agents write one now, and the name is sanduk's own, not either agent's.
-
 
 ## [0.2.2]
 

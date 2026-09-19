@@ -32,7 +32,9 @@ def test_only_openai_names_a_default_model():
 
 
 def test_unknown_provider_names_the_known_ones():
-    with pytest.raises(KeyError, match="anthropic"):
+    """AgentboxError, as get_agent and get_runtime raise: cli.main turns that
+    into a line and an exit code, and turned the old KeyError into a traceback."""
+    with pytest.raises(AgentboxError, match="anthropic"):
         get_provider("gemini")
 
 

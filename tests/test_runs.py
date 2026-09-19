@@ -128,3 +128,23 @@ def test_an_unreadable_record_is_dropped(state, engine):
 
 def test_sweeping_an_empty_state_directory_is_not_an_error(state, engine):
     assert sweep() == []
+
+
+def test_a_stopped_daemon_keeps_the_record(state, monkeypatch):
+    """The same guarantee through the real engine, not the stub.
+
+    StubEngine raised for an unreachable engine from the start. Docker's
+    `list_containers` returned [] instead, so `sweep` read "the engine holds
+    none of these" and unlinked the record of a live container.
+    """
+    from sanduk import runtime as rt
+
+    def fake(cmd, **kw):
+        return subprocess.CompletedProcess(cmd, 1, "", "Cannot connect to the daemon")
+
+    monkeypatch.setattr(rt, "run", fake)
+    monkeypatch.setattr("sanduk.runs.get_runtime", lambda _: rt.get_runtime("docker"))
+    claim("docker", "sanduk-abcd")
+    rewrite("sanduk-abcd", pid=dead_pid())
+    assert sweep() == []
+    assert (runs_dir() / "sanduk-abcd.json").exists()

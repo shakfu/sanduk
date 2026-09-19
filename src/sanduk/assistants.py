@@ -530,10 +530,14 @@ def wake(db: sqlite3.Connection, assistant: Assistant, runtime: str | None = Non
     # failed wakeup lands here as a number rather than an exception.
     from sanduk.cli import main
 
-    stats_file = state_dir() / "wakeup.json"
+    # Keyed on run_id, which the shared database makes unique across processes:
+    # two `serve` loops waking different assistants both wrote one wakeup.json,
+    # and one unlinked it while the other was still reading it.
+    stats_file = state_dir() / f"wakeup-{run_id}.json"
     stats_file.unlink(missing_ok=True)
     code = main(run_argv(assistant, task_file, report, runtime, stats_file))
     stats, error = read_stats(stats_file)
+    stats_file.unlink(missing_ok=True)
 
     db.execute(
         "UPDATE runs SET ended_at = ?, exit_code = ?, stats = ?, error = ? WHERE id = ?",
@@ -608,7 +612,15 @@ def tick(
     """
     worst = 0
     for found in due(db, name):
-        assistant = load(Path(found["dir"]))
+        try:
+            assistant = load(Path(found["dir"]))
+        except (AgentboxError, OSError) as e:
+            # An assistant.toml that was moved, renamed or broken since it was
+            # registered. It is one assistant's problem: raising here skipped
+            # every other assistant that was due in the same pass.
+            note(f"{found['name']}: cannot load {found['dir']}: {e}")
+            worst = max(worst, 2)
+            continue
         if not take(db, assistant.name):
             note(f"{assistant.name}: another process is running it")
             continue
@@ -662,8 +674,16 @@ def serve(db: sqlite3.Connection, interval: int = 60, runtime: str | None = None
             # A wakeup that a signal tore down took the signal with it: `run`
             # installs its own handlers while it holds a container, so this
             # loop learns about it from the exit code rather than from `halt`.
-            if interrupted(tick(db, runtime=runtime)):
-                break
+            try:
+                if interrupted(tick(db, runtime=runtime)):
+                    break
+            except (AgentboxError, OSError, sqlite3.Error) as e:
+                # A locked database, an engine that went away, a full disk.
+                # The pass is lost; the daemon is not. Waiting `interval`
+                # rather than `nap` keeps a still-due assistant from spinning.
+                note(f"pass failed, retrying in {interval}s: {e}")
+                stopping.wait(interval)
+                continue
             if stopping.is_set():
                 break
             stopping.wait(nap(db, interval))

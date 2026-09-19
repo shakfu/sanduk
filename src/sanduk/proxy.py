@@ -376,7 +376,16 @@ class Handler(BaseHTTPRequestHandler):
 
         if cfg.log_dir:
             path = os.path.join(cfg.log_dir, f"{seq:03d}.json")
-            with open(path, "wb") as fh:
+            # O_EXCL and O_NOFOLLOW, not open(path, "wb"): the sequence is this
+            # process's own, so a name already taken is something else's, and a
+            # symlink at it would put the body wherever that symlink points.
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+            try:
+                fd = os.open(path, flags, 0o600)
+            except OSError as e:
+                self.note(f"{digest} -> not written: {e}")
+                return
+            with os.fdopen(fd, "wb") as fh:
                 fh.write(body)
             digest += f" -> {path}"
         self.note(digest)

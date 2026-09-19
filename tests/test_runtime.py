@@ -429,10 +429,17 @@ def test_an_empty_prefix_lists_everything(monkeypatch):
 
 
 @pytest.mark.parametrize("engine", ["apple", "docker"])
-def test_a_failed_listing_is_empty_not_an_error(monkeypatch, engine):
-    """Teardown calls this. Raising there would strand a container."""
+def test_a_failed_listing_raises_rather_than_reading_as_empty(monkeypatch, engine):
+    """An engine that cannot answer is not an engine holding no containers.
+
+    `runs.sweep` drops a record once the listing shows the engine no longer
+    holds what the record names. Answering [] for a stopped daemon dropped the
+    records of every orphan instead, leaving containers alive with a key in
+    them and nothing left that named them.
+    """
     responses(monkeypatch, returncode=1, stdout=DOCKER_LIST)
-    assert get_runtime(engine).list_containers("sanduk-") == []
+    with pytest.raises(AgentboxError):
+        get_runtime(engine).list_containers("sanduk-")
 
 
 # --- images, networks, and the engine's own service --------------------------
@@ -554,3 +561,42 @@ def test_the_holder_sleeps_as_long_as_it_is_told(monkeypatch):
     engine.hold_network_up("sanduk-net", "img")
     assert [spec.command for spec in seen] == [["3600"], [str(runtime.HOLDER_SECONDS)]]
     assert seen[0].entrypoint == "sleep"
+
+
+# --- a reused network keeps what it was created with -------------------------
+
+DOCKER_ROUTABLE = (
+    '[{"Name": "sanduk-net", "Internal": false, '
+    '"IPAM": {"Config": [{"Subnet": "172.20.0.0/16", "Gateway": "172.20.0.1"}]}}]'
+)
+
+
+def test_a_sealed_run_refuses_a_routable_network_it_would_reuse(monkeypatch):
+    """ensure_network reuses a network by name. A `key-safe` bridge under the
+    name a sealed run asked for left that run with a route off the host."""
+    responses(monkeypatch, stdout=DOCKER_ROUTABLE)
+    with pytest.raises(AgentboxError, match="route off the host"):
+        get_runtime("docker").ensure_network("sanduk-net", internal=True)
+
+
+def test_an_internal_network_is_reused(monkeypatch):
+    responses(monkeypatch, stdout=DOCKER_NETWORK)
+    gateway, _ = get_runtime("docker").ensure_network("sanduk-net", internal=True)
+    assert gateway == "172.20.0.1"
+
+
+def test_a_routable_run_reuses_a_routable_network(monkeypatch):
+    """key-safe asks for egress, so a routable network is what it wants."""
+    responses(monkeypatch, stdout=DOCKER_ROUTABLE)
+    gateway, _ = get_runtime("docker").ensure_network("sanduk-open", internal=False)
+    assert gateway == "172.20.0.1"
+
+
+def test_an_engine_that_does_not_report_the_mode_reuses_the_network(monkeypatch):
+    """Apple's engine answers None, so there is nothing to refuse on, and
+    cli.parse_args carries that case instead."""
+    responses(monkeypatch, stdout='[{"status": {"ipv4Gateway": "192.168.64.1", '
+                                  '"ipv4Subnet": "192.168.64.0/24"}}]')
+    engine = get_runtime("apple")
+    assert engine.network_internal("sanduk-net") is None
+    assert engine.ensure_network("sanduk-net", internal=True)[0] == "192.168.64.1"

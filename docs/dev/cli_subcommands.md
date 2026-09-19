@@ -24,7 +24,7 @@ Acceptance bar: the Makefile contains no engine name. `ENGINE` and `CONTAINERFIL
 
 ## Commands
 
-```
+```text
 sanduk <command> [options]
 
   run       run an agent in a disposable container

@@ -193,6 +193,11 @@ class Runtime:
         """(gateway, subnet), or None if the network does not exist."""
         raise NotImplementedError
 
+    def network_internal(self, name: str) -> bool | None:
+        """Whether `name` has no route off the host, or None if this engine
+        does not report it. `ensure_network` can only check what it is told."""
+        return None
+
     def ensure_network(self, name: str, internal: bool = True) -> tuple[str, str]:
         """Create `name` if it is not already there, and return (gateway, subnet).
 
@@ -200,9 +205,21 @@ class Runtime:
         without a route off the host, the relay is the one address a container
         can reach; with one, the relay still holds the key and the container
         reaches everything else too.
+
+        A network that is already there is reused, so what it was created with
+        is what a `sealed` run gets. Reuse is refused where the engine reports
+        a routable network under a name a sealed run asked for: the two modes
+        have different default names, but `--proxy-network` can name either.
         """
         info = self.network_info(name)
         if info:
+            if internal and self.network_internal(name) is False:
+                raise AgentboxError(
+                    f"network {name} already exists with a route off the host, "
+                    f"and a sealed run must have none. Delete it "
+                    f"(`{self.cli} network {self.delete_verb} {name}`) or name "
+                    f"another with --proxy-network"
+                )
             return info
         kind = "internal" if internal else "routable"
         note(f"creating {kind} network {name}")
@@ -262,7 +279,13 @@ class Runtime:
     # --- containers ---------------------------------------------------------
 
     def list_containers(self, prefix: str = "") -> list[Container]:
-        """Containers whose name starts with `prefix`, running or not."""
+        """Containers whose name starts with `prefix`, running or not.
+
+        Raises when the engine cannot answer. An empty list has to mean there
+        are none: `runs.sweep` drops a record once the engine says it no longer
+        holds the containers that record names, and a stopped daemon answering
+        "none" made it drop the record of a container still holding a key.
+        """
         raise NotImplementedError
 
     def shell_argv(self, image: str) -> list[str]:
@@ -382,11 +405,16 @@ class AppleContainer(Runtime):
         except (ValueError, KeyError, IndexError):
             return None
 
+    # No network_internal override: whether this CLI reports the mode of an
+    # existing network is unconfirmed, so the base class answers None and a
+    # reused network is not verified here. `parse_args` refuses a
+    # --proxy-network that crosses the modes, which is the reachable case.
+
     def list_containers(self, prefix: str = "") -> list[Container]:
         # Columns, because this CLI has no --format. ID IMAGE OS ARCH STATE ...
         r = run([self.cli, "list", "-a"], capture_output=True)
         if r.returncode != 0:
-            return []
+            raise AgentboxError(f"`{self.cli} list -a` failed: {r.stderr.strip()}")
         out = []
         for line in r.stdout.splitlines()[1:]:
             f = line.split()
@@ -500,6 +528,15 @@ class Docker(Runtime):
         except (ValueError, KeyError, IndexError):
             return None
 
+    def network_internal(self, name: str) -> bool | None:
+        r = run([self.cli, "network", "inspect", name], capture_output=True)
+        if r.returncode != 0:
+            return None
+        try:
+            return bool(json.loads(r.stdout)[0]["Internal"])
+        except (ValueError, KeyError, IndexError):
+            return None
+
     def list_containers(self, prefix: str = "") -> list[Container]:
         # --format over columns: a named field cannot shift under a value that
         # contains a space, and an unknown field fails loudly at the template.
@@ -508,7 +545,7 @@ class Docker(Runtime):
             capture_output=True,
         )
         if r.returncode != 0:
-            return []
+            raise AgentboxError(f"`{self.cli} ps -a` failed: {r.stderr.strip()}")
         out = []
         for line in r.stdout.splitlines():
             f = line.split("\t")

@@ -21,6 +21,7 @@ import secrets
 import shlex
 import shutil
 import signal
+import sqlite3
 import stat
 import subprocess
 import sys
@@ -28,6 +29,7 @@ import time
 import uuid
 from collections import namedtuple
 from collections.abc import Callable
+from contextlib import closing
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -389,8 +391,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=Path("./sanduk-logs"),
         help="where --log-bodies writes full request JSON (default: "
-        "./sanduk-logs). Deliberately outside the bind mount, "
-        "so the agent cannot read or edit its own audit trail.",
+        "./sanduk-logs). A path inside -w or a --mount is refused: "
+        "the agent must not be able to edit its own audit trail.",
     )
 
     g = p.add_argument_group("lifecycle")
@@ -435,6 +437,24 @@ def resolve_mode(args: argparse.Namespace) -> argparse.Namespace:
     args.egress = mode.egress
     if args.proxy_network is None:
         args.proxy_network = mode.network or MODES["sealed"].network
+    else:
+        # An existing network is reused as it was created, and only Docker
+        # reports whether that was with a route off the host. The modes have
+        # different default names; naming one mode's default under the other
+        # is how a sealed run silently kept its egress.
+        crossed = [
+            other
+            for other, m in MODES.items()
+            if m.network == args.proxy_network and m.egress != mode.egress
+        ]
+        if crossed:
+            raise AgentboxError(
+                f"--proxy-network {args.proxy_network} is the default network "
+                f"for --mode {crossed[0]}, which "
+                f"{'has' if MODES[crossed[0]].egress else 'has no'} route off "
+                f"the host. --mode {args.mode} needs the opposite; name another "
+                f"network"
+            )
     return args
 
 
@@ -971,6 +991,24 @@ def parse_mounts(values: list[str]) -> list[Mount]:
     return mounts
 
 
+def check_log_dir(log_dir: Path, workdir: Path, mounts: list[Mount]) -> None:
+    """Refuse a request-body log the agent could reach.
+
+    `--log-dir` is documented as being outside the bind mount, because the
+    bodies are the audit trail of what the agent sent. The default is relative
+    to the caller's directory, so `-w .` put it inside /work and the agent
+    could edit its own record. A mount is the same exposure by another flag.
+    """
+    resolved = log_dir.resolve()
+    for host, where in [(workdir, "-w"), *((m.host, "--mount") for m in mounts)]:
+        if resolved == host or resolved.is_relative_to(host):
+            raise AgentboxError(
+                f"--log-dir {resolved} is inside {host}, which {where} puts in "
+                f"the container: the agent could read and edit the bodies it "
+                f"sent. Point --log-dir outside it."
+            )
+
+
 def build_spec(
     args: argparse.Namespace,
     sel: Selection,
@@ -979,6 +1017,7 @@ def build_spec(
     workdir: Path,
     task: str,
     network: str | None = None,
+    mounts: list[Mount] | None = None,
 ) -> ContainerSpec:
     """Map parsed flags onto one engine-neutral container description."""
     inherit = [wiring.key_env]
@@ -994,7 +1033,7 @@ def build_spec(
         cpus=args.cpus,
         memory=args.memory,
         mount=(workdir, WORKDIR_DEST),
-        mounts=parse_mounts(getattr(args, "mount", [])),
+        mounts=parse_mounts(getattr(args, "mount", [])) if mounts is None else mounts,
         inherit_env=inherit,
         # The agent's own settings first, so an explicit -e can override one.
         env=[f"{k}={v}" for k, v in wiring.env.items()] + list(args.env),
@@ -1085,6 +1124,11 @@ def run(args: argparse.Namespace) -> int:
         raise AgentboxError(f"{provider.key_env} is not set. export it, then re-run.")
 
     workdir = args.workdir.resolve()
+    # Parsed here, not in build_spec: build_spec runs after the holder is up and
+    # the relay is bound, and a --mount it refused there left both behind.
+    mounts = parse_mounts(getattr(args, "mount", []))
+    if args.log_bodies:
+        check_log_dir(args.log_dir, workdir, mounts)
 
     if not args.dry_run and not args.skip_key_check:
         # Before anything is started, so a bad key cannot leak a container.
@@ -1100,6 +1144,15 @@ def run(args: argparse.Namespace) -> int:
     gateway, port = "", 0
     token = ""
     child_env = os.environ.copy()
+
+    def drop_resources() -> None:
+        """Give back the relay, the holder and the record, on a failed start."""
+        if proxy_srv:
+            proxy_srv.shutdown()
+        if holder:
+            runtime.destroy(holder)
+        if record:
+            record.release()
 
     if args.proxy:
         runtime.require_run()
@@ -1118,51 +1171,58 @@ def run(args: argparse.Namespace) -> int:
             if holder:
                 record.add(holder)
             if not wait_for_gateway(gateway):
-                if holder:
-                    runtime.destroy(holder)
-                record.release()
+                drop_resources()
                 raise AgentboxError(
                     f"{gateway} never became bindable on this host.{runtime.gateway_hint}"
                 )
             proxy_srv, port = _start_relay(args, key, token, gateway, name, provider)
 
-    wiring = sel.agent.wire(args, provider, relay_root(args, gateway, port))
-    # In proxy mode the container gets the run token; the real key stays in this
-    # process and in the proxy thread. Either way the value comes from the child
-    # env, so it appears in no argv and in no `ps` line.
-    secret = token if args.proxy else key
-    if secret:
-        child_env[wiring.key_env] = secret
-    if wiring.base_url:
-        child_env[wiring.base_url_env] = wiring.base_url
+    # Everything from here to the run's own try/finally can raise, and until
+    # this block existed nothing gave back what the proxy block above took: an
+    # image that would not build, or a workdir that would not mkdir, left the
+    # holder running, the relay listening on the bridge and the record unowned.
+    try:
+        wiring = sel.agent.wire(args, provider, relay_root(args, gateway, port))
+        # In proxy mode the container gets the run token; the real key stays in
+        # this process and in the proxy thread. Either way the value comes from
+        # the child env, so it appears in no argv and in no `ps` line.
+        secret = token if args.proxy else key
+        if secret:
+            child_env[wiring.key_env] = secret
+        if wiring.base_url:
+            child_env[wiring.base_url_env] = wiring.base_url
 
-    cmd = runtime.run_argv(
-        build_spec(args, sel, wiring, name, workdir, task, network=network)
-    )
-
-    if args.dry_run:
-        print(shlex.join(cmd))
-        if args.proxy:
-            print(f"# proxy: {gateway} -> {api_url} ({provider.name})")
-        print(
-            f"# container env: {wiring.key_env}=<credential> "
-            f"{wiring.base_url_env}={wiring.base_url or '<agent default>'}"
+        cmd = runtime.run_argv(
+            build_spec(args, sel, wiring, name, workdir, task, network, mounts)
         )
-        return 0
 
-    runtime.require_run()
-    if not args.proxy:  # the relayed path settled its image above
-        ensure_image(runtime, args, sel, workdir)
-    # Not before the dry-run return above, and not before the key check: until
-    # a run is about to start, the previous report is still the only result
-    # there is, and a command that only prints its argv must not destroy it.
-    workdir.mkdir(parents=True, exist_ok=True)
-    # unlink, not exists() then unlink: exists() resolves, so a symlink the
-    # last agent left would survive to shadow this run's report.
-    (workdir / REPORT_NAME).unlink(missing_ok=True)
-    sweep()
-    if record is None:
-        record = claim(args.runtime, name)
+        if args.dry_run:
+            print(shlex.join(cmd))
+            if args.proxy:
+                print(f"# proxy: {gateway} -> {api_url} ({provider.name})")
+            print(
+                f"# container env: {wiring.key_env}=<credential> "
+                f"{wiring.base_url_env}={wiring.base_url or '<agent default>'}"
+            )
+            return 0
+
+        runtime.require_run()
+        if not args.proxy:  # the relayed path settled its image above
+            ensure_image(runtime, args, sel, workdir)
+        # Not before the dry-run return above, and not before the key check:
+        # until a run is about to start, the previous report is still the only
+        # result there is, and a command that only prints its argv must not
+        # destroy it.
+        workdir.mkdir(parents=True, exist_ok=True)
+        # unlink, not exists() then unlink: exists() resolves, so a symlink the
+        # last agent left would survive to shadow this run's report.
+        (workdir / REPORT_NAME).unlink(missing_ok=True)
+        sweep()
+        if record is None:
+            record = claim(args.runtime, name)
+    except BaseException:
+        drop_resources()
+        raise
 
     if args.proxy and args.egress:
         note(
@@ -1317,54 +1377,56 @@ def _collect_report(
 
 
 def assistant(args: argparse.Namespace) -> int:
-    db = assistants.connect()
-    if args.action == "add":
-        added = assistants.load(args.dir)
-        assistants.register(db, added)
-        note(f"registered {added.name} -> {added.dir}")
-    elif args.action == "list":
-        registered = assistants.rows(db)
-        for r in registered:
-            left = r["next_due_at"] - assistants.now()
-            when = "disabled" if r["disabled"] else ("due" if left <= 0 else f"{left}s")
-            print(f"{r['name']:16}  {when:10}  {r['dir']}")
-        if not registered:
-            note("no assistants registered (`sanduk assistant add <dir>`)")
-    elif args.action == "show":
-        print(assistants.summary(db, args.name))
-    else:
-        disabled = args.action == "disable"
-        assistants.set_disabled(db, args.name, disabled)
-        note(f"{args.name} is {'disabled' if disabled else 'enabled'}")
+    with closing(assistants.connect()) as db:
+        if args.action == "add":
+            added = assistants.load(args.dir)
+            assistants.register(db, added)
+            note(f"registered {added.name} -> {added.dir}")
+        elif args.action == "list":
+            registered = assistants.rows(db)
+            for r in registered:
+                left = r["next_due_at"] - assistants.now()
+                when = (
+                    "disabled" if r["disabled"] else ("due" if left <= 0 else f"{left}s")
+                )
+                print(f"{r['name']:16}  {when:10}  {r['dir']}")
+            if not registered:
+                note("no assistants registered (`sanduk assistant add <dir>`)")
+        elif args.action == "show":
+            print(assistants.summary(db, args.name))
+        else:
+            disabled = args.action == "disable"
+            assistants.set_disabled(db, args.name, disabled)
+            note(f"{args.name} is {'disabled' if disabled else 'enabled'}")
     return 0
 
 
 def tell(args: argparse.Namespace) -> int:
-    db = assistants.connect()
-    assistants.tell(db, args.name, " ".join(args.message))
+    with closing(assistants.connect()) as db:
+        assistants.tell(db, args.name, " ".join(args.message))
     note(f"queued for {args.name}; it arrives on the next wakeup")
     return 0
 
 
 def tick(args: argparse.Namespace) -> int:
-    return assistants.tick(db=assistants.connect(), name=args.name, runtime=args.runtime)
+    with closing(assistants.connect()) as db:
+        return assistants.tick(db=db, name=args.name, runtime=args.runtime)
 
 
 def serve(args: argparse.Namespace) -> int:
-    return assistants.serve(
-        assistants.connect(), interval=args.interval, runtime=args.runtime
-    )
+    with closing(assistants.connect()) as db:
+        return assistants.serve(db, interval=args.interval, runtime=args.runtime)
 
 
 def outbox(args: argparse.Namespace) -> int:
-    db = assistants.connect()
-    if args.deliver:
-        sent = assistants.deliver(db, args.deliver, args.name)
-        note(f"delivered {sent}")
-        return 0
-    entries = assistants.outbox(
-        db, args.name, undelivered=args.undelivered, pending=args.pending
-    )
+    with closing(assistants.connect()) as db:
+        if args.deliver:
+            sent = assistants.deliver(db, args.deliver, args.name)
+            note(f"delivered {sent}")
+            return 0
+        entries = assistants.outbox(
+            db, args.name, undelivered=args.undelivered, pending=args.pending
+        )
     for entry in entries:
         when = datetime.fromtimestamp(entry["created_at"], UTC).isoformat()
         state = assistants.state_of(entry)
@@ -1378,7 +1440,8 @@ def outbox(args: argparse.Namespace) -> int:
 def decide(args: argparse.Namespace) -> int:
     """approve and reject: one verb, two words for the same record."""
     approve = args.command == "approve"
-    changed = assistants.decide(assistants.connect(), args.id, approve)
+    with closing(assistants.connect()) as db:
+        changed = assistants.decide(db, args.id, approve)
     note(f"{changed} {'approved' if approve else 'rejected'}")
     if changed < len(args.id):
         note("the rest were decided or delivered already")
@@ -1386,8 +1449,8 @@ def decide(args: argparse.Namespace) -> int:
 
 
 def runs(args: argparse.Namespace) -> int:
-    db = assistants.connect()
-    found = assistants.history(db, args.name, args.limit)
+    with closing(assistants.connect()) as db:
+        found = assistants.history(db, args.name, args.limit)
     for r in found:
         when = datetime.fromtimestamp(r["started_at"], UTC).isoformat()
         took = f"{r['ended_at'] - r['started_at']}s" if r["ended_at"] else "running"
@@ -1423,12 +1486,23 @@ COMMAND_FUNCS: dict[str, Callable[[argparse.Namespace], int]] = {
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Every command's one exit. A failure the caller can act on becomes a line
+    and a status; a bug keeps its traceback.
+
+    OSError and sqlite3.Error are in the first group: a state directory that
+    will not mkdir, a gateway address already bound, a database on a full disk.
+    Library code raises those where AgentboxError would say nothing more, and
+    a traceback is not what the caller of a CLI needs to read.
+    """
     try:
         args = parse_args(argv)
         return COMMAND_FUNCS[args.command](args)
     except AgentboxError as e:
         print(f"sanduk: {e}", file=sys.stderr)
         return e.code
+    except (OSError, sqlite3.Error) as e:
+        print(f"sanduk: {type(e).__name__}: {e}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

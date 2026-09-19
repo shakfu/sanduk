@@ -103,8 +103,8 @@ def test_the_agent_runs_code_and_reports_the_result(case, tmp_path):
         argv += ["--model", MODELS[case.provider]]
     if case.provider == "openrouter" and case.mode != "open":
         argv += ["--budget", BUDGET_USD]
-    if os.environ.get("RUNTIME"):
-        argv += ["--runtime", os.environ["RUNTIME"]]
+    if os.environ.get("SANDUK_RUNTIME"):
+        argv += ["--runtime", os.environ["SANDUK_RUNTIME"]]
 
     out = subprocess.run(argv, capture_output=True, text=True)
     log = f"stdout:\n{out.stdout[-3000:]}\nstderr:\n{out.stderr[-3000:]}"

@@ -105,7 +105,8 @@ Needs a native Docker daemon, `/dev/kvm` access, and a user that can reach the D
 
    ```sh
    make image AGENT=hax RUNTIME=docker
-   RUNTIME=docker AGENT=hax NETWORK=sanduk-kata OCI_RUNTIME=kata uv run pytest -q -m container
+   SANDUK_RUNTIME=docker SANDUK_AGENT=hax SANDUK_NETWORK=sanduk-kata \
+     SANDUK_OCI_RUNTIME=kata uv run pytest -q -m container
    ```
 
    This covers the `/work` round trip under sanduk's hardening flags, egress blocked on the internal network, the relay on the gateway, the key kept out, a wakeup, and two concurrent `sealed` runs.

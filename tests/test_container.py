@@ -4,11 +4,16 @@
 They make no API calls: the relay is proved by the 401 an invalid key earns from
 the real endpoint, which is itself proof the request got there.
 
-RUNTIME, AGENT, IMAGE, NETWORK and OCI_RUNTIME select what is booted, so the
-same suite runs against Apple `container` on macOS and against Docker on Linux,
-under Docker's default OCI runtime or another such as runsc. Docker on a native
-daemon is the only configuration that can prove --proxy at all: Apple's engine
-and Docker Desktop both keep the bridge inside a VM.
+SANDUK_RUNTIME, SANDUK_AGENT, SANDUK_IMAGE, SANDUK_NETWORK and
+SANDUK_OCI_RUNTIME select what is booted, so the same suite runs against Apple
+`container` on macOS and against Docker on Linux, under Docker's default OCI
+runtime or another such as runsc. Docker on a native daemon is the only
+configuration that can prove --proxy at all: Apple's engine and Docker Desktop
+both keep the bridge inside a VM.
+
+Prefixed, because these are read at import: an unprefixed AGENT is a name other
+tools set, and one that named no agent aborted collection for the whole suite,
+including the tests this marker deselects.
 """
 
 import argparse
@@ -31,17 +36,17 @@ from sanduk.runtime import ContainerSpec, get_runtime, wait_for_gateway
 
 pytestmark = pytest.mark.container
 
-ENGINE = get_runtime(os.environ.get("RUNTIME"))
-AGENT = get_agent(os.environ.get("AGENT", "claude"))
+ENGINE = get_runtime(os.environ.get("SANDUK_RUNTIME"))
+AGENT = get_agent(os.environ.get("SANDUK_AGENT", "claude"))
 IMAGE = (
-    os.environ.get("IMAGE")
+    os.environ.get("SANDUK_IMAGE")
     or resolve_image(
         parse_args(["build", "--agent", AGENT.name, "--runtime", ENGINE.name])
     )[1].tag
 )
-NETWORK = os.environ.get("NETWORK", "sanduk-net")
+NETWORK = os.environ.get("SANDUK_NETWORK", "sanduk-net")
 # Docker's --runtime, e.g. runsc: the same suite under another OCI runtime.
-OCI_RUNTIME = os.environ.get("OCI_RUNTIME")
+OCI_RUNTIME = os.environ.get("SANDUK_OCI_RUNTIME")
 RUN = [ENGINE.cli, "run", "--rm", *(["--runtime", OCI_RUNTIME] if OCI_RUNTIME else [])]
 OCI_FLAGS = ["--oci-runtime", OCI_RUNTIME] if OCI_RUNTIME else []  # for `sanduk run`
 FAKE_KEY = "sk-ant-api03-REAL-KEY-STAYS-ON-HOST"
@@ -338,7 +343,7 @@ def relays() -> bool:
     return True
 
 
-def test_a_wakeup_is_a_container_a_relayed_call_and_a_row(assistant_home):
+def test_a_wakeup_is_a_container_a_relayed_call_and_a_row(assistant_home, request):
     """The whole assistant path, with nothing stubbed but the model: config on
     disk -> container -> relay -> report -> database."""
     if OPENAI_CHAT not in AGENT.protocols:
@@ -346,6 +351,7 @@ def test_a_wakeup_is_a_container_a_relayed_call_and_a_row(assistant_home):
     if not relays():
         pytest.skip(f"{AGENT.name} cannot be pointed at the relay")
     db = assistants.connect()
+    request.addfinalizer(db.close)
     assistants.register(db, assistants.load(assistant_home))
     assistants.tell(db, "triage", "this message rides the wakeup")
 

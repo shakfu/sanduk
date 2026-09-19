@@ -5,6 +5,7 @@ replaced, which is the seam the whole module is built on: an assistant can do
 nothing a typed `sanduk run` cannot.
 """
 
+import contextlib
 import json
 import os
 import pathlib
@@ -45,7 +46,8 @@ def home(state):
 
 @pytest.fixture
 def db(state):
-    return assistants.connect()
+    with contextlib.closing(assistants.connect()) as conn:
+        yield conn
 
 
 @pytest.fixture
@@ -362,9 +364,10 @@ def test_the_database_lives_under_the_state_directory(state):
 
 
 def test_a_second_connection_sees_the_same_schema(db, registered):
-    other = sqlite3.connect(assistants.db_path())
-    other.row_factory = sqlite3.Row
-    assert [r["name"] for r in other.execute("SELECT name FROM assistants")] == ["triage"]
+    with contextlib.closing(sqlite3.connect(assistants.db_path())) as other:
+        other.row_factory = sqlite3.Row
+        names = [r["name"] for r in other.execute("SELECT name FROM assistants")]
+    assert names == ["triage"]
 
 
 # --- serve ------------------------------------------------------------------
@@ -598,11 +601,11 @@ def test_a_database_written_before_stats_existed_gains_the_columns(state):
     )
     old.execute("INSERT INTO runs (name, started_at) VALUES ('triage', 1)")
     old.close()
-    db = assistants.connect()
-    have = {r["name"] for r in db.execute("PRAGMA table_info(runs)")}
-    assert have >= {"stats", "error"}
-    # The history survived the column.
-    assert [r["name"] for r in db.execute("SELECT name FROM runs")] == ["triage"]
+    with contextlib.closing(assistants.connect()) as db:
+        have = {r["name"] for r in db.execute("PRAGMA table_info(runs)")}
+        assert have >= {"stats", "error"}
+        # The history survived the column.
+        assert [r["name"] for r in db.execute("SELECT name FROM runs")] == ["triage"]
 
 
 # --- mounts and approvals ---------------------------------------------------
@@ -696,7 +699,71 @@ def test_an_outbox_written_before_approvals_stays_deliverable(state):
         "INSERT INTO outbox (name, run_id, created_at, body) VALUES ('t', 1, 7, 'x')"
     )
     old.close()
-    db = assistants.connect()
-    entry = assistants.outbox(db)[0]
+    with contextlib.closing(assistants.connect()) as db:
+        entry = assistants.outbox(db)[0]
     assert assistants.state_of(entry) == "approved"
     assert entry["approved_at"] == 7
+
+
+# --- one failure is not the end of the daemon -------------------------------
+
+
+def test_an_assistant_that_will_not_load_leaves_the_rest_of_the_pass(
+    db, home, monkeypatch, capsys
+):
+    """A directory moved since it was registered. Raising out of `tick` skipped
+    every other assistant that was due in the same pass."""
+    gone = home.parent / "vanished"
+    gone.mkdir()
+    (gone / "assistant.toml").write_text(CONFIG.replace("triage", "vanished"))
+    (gone / "brief.md").write_text("Triage the inbox.")
+    assistants.register(db, assistants.load(gone))
+    assistants.register(db, assistants.load(home))
+    (gone / "assistant.toml").unlink()
+
+    woke = []
+    monkeypatch.setattr(
+        assistants, "wake", lambda db_, a, runtime=None: woke.append(a.name) or 0
+    )
+    assert assistants.tick(db) == 2
+    assert woke == ["triage"]
+    assert "cannot load" in capsys.readouterr().err
+
+
+def test_a_failed_pass_does_not_stop_serve(db, monkeypatch, capsys):
+    """A locked database or an engine that went away loses the pass, not the
+    daemon: `serve` is what a launchd or systemd unit supervises."""
+    passes = []
+
+    def flaky(db_, name=None, runtime=None):
+        passes.append(1)
+        if len(passes) == 1:
+            raise sqlite3.OperationalError("database is locked")
+        os.kill(os.getpid(), signal.SIGTERM)
+        return 0
+
+    monkeypatch.setattr(assistants, "tick", flaky)
+    assert assistants.serve(db, interval=0) == 0
+    assert len(passes) == 2
+    assert "pass failed" in capsys.readouterr().err
+
+
+def test_each_wakeup_has_its_own_stats_file(db, home, ran):
+    """One static wakeup.json was shared: two processes waking different
+    assistants raced, and one unlinked the file the other was reading."""
+    calls, _ = ran
+    second = home.parent / "review"
+    second.mkdir()
+    (second / "assistant.toml").write_text(CONFIG.replace("triage", "review"))
+    (second / "brief.md").write_text("Review the queue.")
+    for d in (home, second):
+        assistants.register(db, assistants.load(d))
+
+    assert assistants.tick(db) == 0
+    files = [argv[argv.index("--stats-file") + 1] for argv in calls]
+    assert len(files) == 2
+    assert len(set(files)) == 2, files
+    assert all("wakeup-" in f for f in files)
+    # Read back, then deleted: nothing accumulates in the state directory.
+    assert list((assistants.state_dir()).glob("wakeup-*.json")) == []
+    assert all(r["stats"] for r in runs_of(db))

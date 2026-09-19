@@ -232,7 +232,7 @@ Your own recipes and kits go in `~/.config/sanduk/recipes/<name>.json` and `~/.c
 
 ## How the relay works
 
-1. `sanduk-net` is created with `--internal`: no route off the host.
+1. `sanduk-net` is created with `--internal`: no route off the host. A network already there is reused as it was created, so a sealed run refuses one Docker reports as routable, and refuses `--proxy-network sanduk-open` on any engine.
 
 2. Under `--runtime apple`, vmnet creates the host bridge only while a container is attached, so a placeholder container is started first and torn down at the end. Docker needs none.
 
@@ -256,7 +256,7 @@ Only OpenRouter reports cost, so `--budget` is refused for the other providers r
 
 `--timeout` bounds one run (default 900s). Every duration sanduk takes reads the same way: a bare number is seconds, and a suffix of `s`, `m`, `h` or `d` multiplies it, so `--timeout 15m` and `--timeout 900` are the same run. In a relayed mode the network holder is started for that long plus five minutes, because vmnet keeps the host bridge up only while a container is attached: if the holder went first, the relay's address would go with it. A timeout over a week is refused, as is a zero or negative one. One upstream call is capped separately at 900s by the relay.
 
-`--log-bodies` records each request body: a digest line per call, full JSON under `--log-dir` (default `./sanduk-logs`, deliberately outside the bind mount so the agent cannot read or edit its own audit trail). Bodies contain the system prompt and every file the agent has read.
+`--log-bodies` records each request body: a digest line per call, full JSON under `--log-dir` (default `./sanduk-logs`). A `--log-dir` inside `-w` or a `--mount` is refused, so the agent cannot read or edit its own audit trail; `sanduk run -w .` needs a `--log-dir` elsewhere. Bodies contain the system prompt and every file the agent has read.
 
 `--mount HOST:DEST[:ro]` puts another host directory in the container, beside the one `-w` gives it. Repeatable, read-write unless `:ro`. A destination at or under `/work` is refused: it would shadow part of what `-w` put there, which is a run reading the wrong files rather than one that fails. Read-only is rendered as `--mount type=bind,...,readonly` because `-v host:dest:ro` is Docker's spelling alone.
 

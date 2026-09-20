@@ -298,8 +298,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     g.add_argument(
         "--oci-runtime",
         metavar="NAME",
-        help="docker only: the OCI runtime that starts the container, e.g. "
-        "runsc (gVisor) or io.containerd.kata.v2",
+        help="docker only: the OCI runtime that starts the container, "
+        "e.g. runsc (gVisor). Only runsc is tested",
     )
 
     g = p.add_argument_group("provider")
@@ -1113,6 +1113,16 @@ def run(args: argparse.Namespace) -> int:
         raise AgentboxError(
             f"--oci-runtime needs --runtime docker: {runtime.name} has no OCI "
             "runtime to swap"
+        )
+    if args.oci_runtime:
+        # `hardening` is rendered whatever starts the container, and a runtime
+        # that ignores a flag says nothing. Kata drops the pid ceiling in both
+        # its runtimes (kata-containers#13824), so on a VM the bound on a fork
+        # bomb is the guest's memory. Not keyed on the name: `--oci-runtime`
+        # takes whatever `daemon.json` calls it.
+        note(
+            "--pids-limit is enforced by runc, not by every OCI runtime: "
+            f"{args.oci_runtime} may ignore it, and Kata's runtimes do"
         )
     sel = select(args)
     provider = sel.provider

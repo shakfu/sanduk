@@ -4,6 +4,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The README has a `What is tested` table, and `--oci-runtime` no longer offers Kata as an example. The flag passes any name to `docker run --runtime`, so naming `io.containerd.kata.v2` read as advice for a runtime nobody here has started; `runsc` is the one measured, in CI on every push.
+
+- `--oci-runtime` says that the pid ceiling may not hold. `Docker.hardening` renders `--pids-limit 1024` whatever starts the container, and Kata drops the field in both its runtimes ([kata-containers#13824](https://github.com/kata-containers/kata-containers/issues/13824)), so under a VM a fork bomb is bounded by the guest's memory instead. The line is printed for any `--oci-runtime`, not for a list of names: the flag takes whatever `daemon.json` calls the runtime. See [docs/dev/microvms.md](docs/dev/microvms.md).
+
 ## [0.3.1]
 
 ### Fixed

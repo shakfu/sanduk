@@ -1,6 +1,8 @@
 # Docker Sandboxes (`sbx`)
 
-Status: investigated from documentation, 2026-09-11. Not installed or measured. Decision: do not integrate; pursue Kata under `--oci-runtime` instead ([microvms.md](microvms.md)). Claims cite primary sources; inference is marked.
+Status: investigated from documentation, 2026-09-11; rechecked 2026-09-20, nothing below changed. Not installed or measured. Decision: do not integrate; pursue Kata under `--oci-runtime` instead ([microvms.md](microvms.md)). Claims cite primary sources; inference is marked.
+
+The 2026-09-20 recheck found the [CLI reference](https://docs.docker.com/reference/cli/sbx/) still empty and no policy page under `configuration/policies/` (404), so the three unresolved items at the end stand. Gondolin is the other managed sandbox considered; see [gondolin.md](gondolin.md).
 
 Scope: whether sanduk should run agents through Docker Sandboxes ([docs](https://docs.docker.com/ai/sandboxes)).
 

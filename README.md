@@ -356,7 +356,7 @@ Another agent is an `Agent` subclass in any package; see [docs/agents.md](docs/a
 
 Every container drops all Linux capabilities and runs under an init process. `--runtime docker` adds `--security-opt no-new-privileges` and `--pids-limit 1024`, which Apple's CLI has no flags for and which matter on a shared kernel; there each container is its own VM. The root filesystem stays writable, because every shipped agent writes under `$HOME`.
 
-`--oci-runtime NAME` swaps the program Docker starts the container with: `runsc` for gVisor, or `io.containerd.kata.v2` for a Kata VM. Either puts the agent off the host kernel. It is refused under `--runtime apple`. See [docs/dev/microvms.md](docs/dev/microvms.md).
+`--oci-runtime NAME` swaps the program Docker starts the container with. `runsc` puts the agent on gVisor's user-space kernel rather than the host's, and is the only value tested here: see [What is tested](#what-is-tested). Docker accepts any runtime named in its `daemon.json`, and sanduk passes the name through unread, so another one runs without being proved to work -- a runtime that ignores one of sanduk's hardening flags reports nothing, which is why `run` prints a line about `--pids-limit` whenever this flag is set. The flag is refused under `--runtime apple`, whose containers are already VMs. What other runtimes would take is in [docs/dev/microvms.md](docs/dev/microvms.md).
 
 `--runtime docker` needs a daemon on this kernel, not one in a VM. Docker Desktop, Colima and Lima keep the bridge inside the VM, so the relay cannot bind the gateway; the run stops at the bind with that reason rather than listening somewhere the container cannot reach. `--runtime apple` is the macOS path.
 
@@ -399,6 +399,22 @@ make system-start / system-stop / system-status
 The `docker` and `gvisor` jobs are the only places `--mode sealed` is proved. A native daemon puts the bridge on the host kernel; Apple's engine and Docker Desktop do not.
 
 `images` runs weekly and on manual dispatch. It builds every agent's image and asks the agent for its version, because pinned agent releases change their flags and output without a commit here.
+
+## What is tested
+
+What has been run, and how far. A configuration missing from this table is one nobody here has seen work, whatever a flag accepts.
+
+| | how far |
+| --- | --- |
+| docker, `open`, `key-safe`, `sealed` | CI on every push, and by hand |
+| docker plus `--oci-runtime runsc` (gVisor) | CI on every push, and by hand |
+| apple `container`, all three modes | by hand, 1.2.0 on arm64 |
+| Every shipped agent's image | the weekly `images` job builds each one and asks its version; it has not run since recipes landed |
+| One real run per agent, sealed, with a report | `make test-agents`, by hand |
+| Anthropic, OpenAI, OpenRouter, openai-compat | `make test-live`, by hand |
+| Any other `--oci-runtime`, Kata included | never run |
+| podman | not implemented |
+| Recipes under docker on amd64 | hax only; the rest are built on arm64 under apple |
 
 ## Testing
 

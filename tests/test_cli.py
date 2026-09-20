@@ -1095,6 +1095,22 @@ def test_an_oci_runtime_reaches_the_docker_argv(tmp_path, capsys):
     assert "--runtime runsc" in capsys.readouterr().out
 
 
+def test_an_oci_runtime_warns_that_the_pid_ceiling_may_not_hold(tmp_path, capsys):
+    """The argv carries --pids-limit whatever starts the container, and Kata
+    drops it silently (kata-containers#13824)."""
+    argv = ["run", "task", "-w", str(tmp_path), "--runtime", "docker"]
+    assert main([*argv, "--oci-runtime", "kata", "--dry-run"]) == 0
+    out = capsys.readouterr()
+    assert "--pids-limit" in out.err and "kata" in out.err
+    assert "--pids-limit" in out.out  # still rendered, hence the warning
+
+
+def test_without_an_oci_runtime_nothing_is_said_about_the_pid_ceiling(tmp_path, capsys):
+    argv = ["run", "task", "-w", str(tmp_path), "--runtime", "docker", "--dry-run"]
+    assert main(argv) == 0
+    assert "--pids-limit is enforced" not in capsys.readouterr().err
+
+
 def test_an_engine_that_cannot_start_an_agent_is_refused_before_the_network(
     tmp_path, monkeypatch, capsys
 ):

@@ -31,7 +31,7 @@ from functools import cache
 from importlib import import_module
 from importlib.metadata import entry_points
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 from sanduk.errors import AgentboxError
 from sanduk.providers import Provider
@@ -250,16 +250,23 @@ def launch(
     timeout: float,
     quiet: bool,
     env: dict[str, str] | None = None,
+    attach_stdin: bool = False,
+    passthrough: TextIO | None = None,
 ) -> tuple[Outcome | None, int]:
     """Stream the agent's JSONL; return its outcome and the exit code.
 
     The timer is what enforces the timeout: an agent that hangs without printing
     would never trip a deadline checked inside the read loop.
+
+    `attach_stdin` hands this process's stdin to the agent, which is how
+    anything reaches a turn already under way. `passthrough` copies every line
+    the agent printed, before it is parsed, to a caller that wants the stream
+    rather than the summary.
     """
     reader = agent.reader()
     proc = subprocess.Popen(
         argv,
-        stdin=subprocess.DEVNULL,
+        stdin=None if attach_stdin else subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         text=True,
         bufsize=1,
@@ -278,6 +285,11 @@ def launch(
         assert proc.stdout is not None
         for raw in proc.stdout:
             line = raw.rstrip("\n")
+            if passthrough is not None:
+                # Verbatim and before anything is parsed: a reader that cannot
+                # make sense of a line must not decide whether it is delivered.
+                passthrough.write(raw if raw.endswith("\n") else raw + "\n")
+                passthrough.flush()
             if not line.strip().startswith("{"):
                 reader.line(line, quiet)
                 continue

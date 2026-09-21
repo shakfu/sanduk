@@ -86,6 +86,8 @@ class ContainerSpec:
     detach: bool = False
     entrypoint: str | None = None
     oci_runtime: str | None = None  # what starts the container: runsc, Kata
+    user: str | None = None  # UID[:GID] the agent process runs as
+    stdin: bool = False  # keep stdin open, so the caller can write to the agent
 
 
 class Runtime:
@@ -116,6 +118,9 @@ class Runtime:
     # Whether a bind mount keeps host ownership inside the container, so the
     # agent writes the workdir only as its owner. Apple's engine maps it.
     keeps_mount_owner = False
+    # Whether `run --user` picks the uid the agent runs as. Without it the
+    # image's own user is the only one there is, and it is fixed at build time.
+    takes_user = False
 
     # --- preflight ----------------------------------------------------------
 
@@ -308,6 +313,12 @@ class Runtime:
         ]
         if spec.detach:
             argv.append("-d")
+        if spec.stdin:
+            # Without it the engine gives the container no stdin at all, and a
+            # pipe into the agent is closed before the first turn.
+            argv.append("-i")
+        if spec.user:
+            argv += ["--user", spec.user]
         if spec.mount:
             host, dest = spec.mount
             argv += ["-v", f"{host}:{dest}", "-w", dest]
@@ -452,6 +463,7 @@ class Docker(Runtime):
     )
     delete_verb = "rm"
     keeps_mount_owner = True
+    takes_user = True
     install_hint = "Install from docs.docker.com/get-docker/."
     takes_oci_runtime = True
     needs_network_holder = False

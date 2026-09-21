@@ -30,7 +30,7 @@ from sanduk.cli import (
 from sanduk.errors import AgentboxError
 from sanduk.providers import get_provider
 from sanduk.runs import runs_dir
-from sanduk.runtime import Container, get_runtime
+from sanduk.runtime import Container, Mount, get_runtime
 
 KEY = "sk-api03-SECRET"
 # The default run reads the default provider's key.
@@ -532,9 +532,9 @@ def workdir_of(uid, mode=0o755):
     return SimpleNamespace(stat=lambda: st)
 
 
-def check(engine, workdir, *flags):
+def check(engine, workdir, *flags, socket=None):
     args = parse_args(["run", "task", *flags])
-    ensure_image(engine, args, select(args), workdir)
+    ensure_image(engine, args, select(args), workdir, socket)
 
 
 def test_an_image_whose_agent_cannot_write_the_workdir_is_refused():
@@ -579,6 +579,67 @@ def test_a_root_workdir_is_not_answered_with_a_rebuild():
 
 def test_an_engine_that_maps_ownership_is_not_checked():
     check(StubEngine(images={"sanduk:latest"}), workdir_of(1001))
+
+
+# --- the run's socket -------------------------------------------------------
+
+
+def socket_at(path):
+    """A real unix socket, with the mode a broker gives one: its owner alone."""
+    import socket as socketlib
+
+    s = socketlib.socket(socketlib.AF_UNIX, socketlib.SOCK_STREAM)
+    s.bind(str(path))
+    path.chmod(0o600)
+    return s
+
+
+def test_a_socket_the_agents_uid_cannot_open_is_refused_before_the_run(tmp_path):
+    """The socket's mode is the gate, so a uid that gate does not admit is a
+    run that fails at its first call rather than at its start."""
+    sock = tmp_path / "run.sock"
+    with socket_at(sock), pytest.raises(AgentboxError, match="admits only its owner"):
+        check(
+            OwnerEngine(uid=os.getuid() + 1),
+            workdir_of(os.getuid() + 1),
+            socket=Mount(host=sock, dest="/run/sanduk/agent.sock"),
+        )
+
+
+def test_a_socket_the_agent_owns_passes(tmp_path):
+    sock = tmp_path / "run.sock"
+    with socket_at(sock):
+        check(
+            OwnerEngine(uid=os.getuid()),
+            workdir_of(os.getuid()),
+            socket=Mount(host=sock, dest="/run/sanduk/agent.sock"),
+        )
+
+
+def test_a_socket_open_to_the_group_is_not_refused_on_a_uid(tmp_path):
+    """Only a sure refusal stops a run: a mode that grants the group lets in a
+    uid this check cannot see."""
+    sock = tmp_path / "run.sock"
+    with socket_at(sock):
+        sock.chmod(0o660)
+        check(
+            OwnerEngine(uid=os.getuid() + 1),
+            workdir_of(os.getuid() + 1),
+            socket=Mount(host=sock, dest="/run/sanduk/agent.sock"),
+        )
+
+
+def test_the_uid_asked_for_is_the_one_that_must_write_the_workdir(tmp_path):
+    """--user replaces the image's own, so the check follows it."""
+    other = os.getuid() + 5
+    with pytest.raises(AgentboxError, match=f"uid {other}"):
+        check(OwnerEngine(uid=os.getuid()), workdir_of(os.getuid()), "--user", str(other))
+
+
+def test_a_user_that_is_not_the_images_own_is_said_out_loud(tmp_path, capsys):
+    check(OwnerEngine(uid=1000), workdir_of(1000, mode=0o777), "--user", "1000")
+    check(OwnerEngine(uid=1000), workdir_of(1001, mode=0o777), "--user", "1001")
+    assert "was built for" in capsys.readouterr().err
 
 
 def test_a_refused_image_leaves_an_existing_report_alone(tmp_path, monkeypatch):

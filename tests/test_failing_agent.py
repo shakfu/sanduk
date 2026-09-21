@@ -4,8 +4,10 @@
 the container. Nothing is built and no engine is contacted.
 """
 
+import io
 import json
 import signal
+import subprocess
 import sys
 import time
 from types import SimpleNamespace
@@ -217,3 +219,55 @@ def test_no_report_is_said_and_the_final_message_printed(monkeypatch, work, caps
     assert code == 0
     assert f"wrote no {REPORT_NAME}" in err
     assert "the answer is 4" in out
+
+
+# --- the agent's stdio ------------------------------------------------------
+
+
+def popen_kwargs(monkeypatch, **flags):
+    """What launch asks subprocess for, without starting anything."""
+    seen = {}
+
+    class Fake:
+        stdout = iter(())
+        returncode = 0
+
+        def __init__(self, argv, **kw):
+            seen.update(kw)
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            pass
+
+    monkeypatch.setattr("sanduk.agent.subprocess.Popen", Fake)
+    launch(ClaudeCode(), ["stub"], 30, True, **flags)
+    return seen
+
+
+def test_the_agent_gets_no_stdin_unless_it_is_asked_for(monkeypatch):
+    assert popen_kwargs(monkeypatch)["stdin"] is subprocess.DEVNULL
+
+
+def test_attaching_stdin_hands_the_agent_this_processs_own(monkeypatch):
+    """Inherited rather than a new pipe: what writes to the agent is whatever
+    started sanduk, and a pipe here would have no other end."""
+    assert popen_kwargs(monkeypatch, attach_stdin=True)["stdin"] is None
+
+
+def test_the_stream_is_copied_verbatim_before_it_is_parsed():
+    """A reader that cannot make sense of a line must not decide whether it is
+    delivered: the copy is of the bytes, not of what they were taken to mean."""
+    stream = io.StringIO()
+    lines = [TOOL_USE, "not json at all", result()]
+    launch(ClaudeCode(), agent(*lines), 30, True, passthrough=stream)
+    copied = stream.getvalue().splitlines()
+    assert copied[0] == json.dumps(TOOL_USE)
+    assert copied[1] == "not json at all"
+    assert json.loads(copied[2])["type"] == "result"
+
+
+def test_without_a_passthrough_nothing_is_copied():
+    outcome, rc = launch(ClaudeCode(), agent(result()), 30, True)
+    assert (outcome.ok, rc) == (True, 0)

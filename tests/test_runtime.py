@@ -595,8 +595,158 @@ def test_a_routable_run_reuses_a_routable_network(monkeypatch):
 def test_an_engine_that_does_not_report_the_mode_reuses_the_network(monkeypatch):
     """Apple's engine answers None, so there is nothing to refuse on, and
     cli.parse_args carries that case instead."""
-    responses(monkeypatch, stdout='[{"status": {"ipv4Gateway": "192.168.64.1", '
-                                  '"ipv4Subnet": "192.168.64.0/24"}}]')
+    responses(
+        monkeypatch,
+        stdout='[{"status": {"ipv4Gateway": "192.168.64.1", '
+        '"ipv4Subnet": "192.168.64.0/24"}}]',
+    )
     engine = get_runtime("apple")
     assert engine.network_internal("sanduk-net") is None
     assert engine.ensure_network("sanduk-net", internal=True)[0] == "192.168.64.1"
+
+
+# --- the work mount, the socket, the user -----------------------------------
+
+
+def unix_socket(path: Path):
+    """A real unix socket at `path`, closed when the test ends."""
+    import socket as socketlib
+
+    s = socketlib.socket(socketlib.AF_UNIX, socketlib.SOCK_STREAM)
+    s.bind(str(path))
+    return s
+
+
+def test_the_workdir_can_be_mounted_at_its_own_host_path(tmp_path):
+    """So an absolute path in a diff or a stack trace resolves on the host."""
+    argv = argv_for("task", "-w", str(tmp_path), "--work-at-host-path", workdir=tmp_path)
+    assert argv[argv.index("-v") + 1] == f"{tmp_path}:{tmp_path}"
+    assert argv[argv.index("-w") + 1] == str(tmp_path)
+
+
+def test_a_mount_under_the_host_path_workdir_is_still_refused(tmp_path):
+    """The shadowing rule follows -w wherever it lands."""
+    other = tmp_path / "other"
+    other.mkdir()
+    with pytest.raises(AgentboxError, match="where -w lands"):
+        argv_for(
+            "task",
+            "-w",
+            str(tmp_path),
+            "--work-at-host-path",
+            "--mount",
+            f"{other}:{tmp_path}/inside",
+            workdir=tmp_path,
+        )
+
+
+def test_the_socket_is_mounted_and_named_in_the_environment(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    sock = tmp_path / "run.sock"
+    with unix_socket(sock):
+        argv = argv_for(
+            "task",
+            "-w",
+            str(work),
+            "--socket",
+            str(sock),
+            "--socket-env",
+            "MINOS_SOCKET",
+            workdir=work,
+        )
+    spec = f"type=bind,source={sock},target=/run/sanduk/agent.sock"
+    assert spec in argv
+    assert "SANDUK_SOCKET=/run/sanduk/agent.sock" in argv
+    assert "MINOS_SOCKET=/run/sanduk/agent.sock" in argv
+
+
+def test_the_socket_takes_the_destination_it_is_given(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    sock = tmp_path / "run.sock"
+    with unix_socket(sock):
+        argv = argv_for(
+            "task", "-w", str(work), "--socket", f"{sock}:/run/minos.sock", workdir=work
+        )
+    assert f"type=bind,source={sock},target=/run/minos.sock" in argv
+    assert "SANDUK_SOCKET=/run/minos.sock" in argv
+
+
+def test_a_socket_inside_the_work_mount_is_refused(tmp_path):
+    """The agent writes the work mount: a socket there is one it can replace."""
+    sock = tmp_path / "run.sock"
+    with unix_socket(sock), pytest.raises(AgentboxError, match="Keep it outside"):
+        argv_for("task", "-w", str(tmp_path), "--socket", str(sock), workdir=tmp_path)
+
+
+def test_a_socket_landing_in_the_work_mount_is_refused(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    sock = tmp_path / "run.sock"
+    with unix_socket(sock), pytest.raises(AgentboxError, match="which the agent writes"):
+        argv_for(
+            "task", "-w", str(work), "--socket", f"{sock}:/work/run.sock", workdir=work
+        )
+
+
+def test_something_that_is_not_a_socket_is_refused(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    ordinary = tmp_path / "run.sock"
+    ordinary.write_text("")
+    with pytest.raises(AgentboxError, match="is not a unix socket"):
+        argv_for("task", "-w", str(work), "--socket", str(ordinary), workdir=work)
+
+
+def user_for(value):
+    """`--user` as the run path resolves it, against the default engine."""
+    from sanduk.cli import container_user
+
+    return container_user(parse_args(["run", "task", "--user", value]), get_runtime())
+
+
+def test_the_user_is_rendered_before_the_image():
+    spec = ContainerSpec(name="n", image="sanduk:latest", user="1001:1001")
+    argv = get_runtime().run_argv(spec)
+    assert argv[argv.index("--user") + 1] == "1001:1001"
+    assert argv.index("--user") < argv.index("sanduk:latest")
+
+
+def test_the_user_host_is_the_callers_own():
+    import os
+
+    assert user_for("host") == f"{os.getuid()}:{os.getgid()}"
+
+
+def test_a_uid_without_a_gid_is_taken_as_it_was_written():
+    assert user_for("1001") == "1001"
+
+
+def test_a_user_that_is_not_a_uid_is_refused():
+    with pytest.raises(AgentboxError, match="expected UID"):
+        user_for("nobody")
+
+
+def test_no_user_flag_leaves_the_image_to_decide(tmp_path):
+    assert "--user" not in argv_for("task", "-w", str(tmp_path), workdir=tmp_path)
+
+
+def test_the_agent_is_never_run_as_root():
+    """The socket's file mode is the gate, and root ignores a file mode."""
+    with pytest.raises(AgentboxError, match="runs no agent as root"):
+        user_for("0")
+
+
+def test_a_user_an_engine_cannot_set_is_refused_rather_than_dropped():
+    from sanduk.cli import container_user
+    from sanduk.runtime import AppleContainer
+
+    args = parse_args(["run", "task", "--user", "1001"])
+    with pytest.raises(AgentboxError, match="needs --runtime docker"):
+        container_user(args, AppleContainer())
+
+
+def test_stdin_is_open_only_when_it_is_asked_for(tmp_path):
+    assert "-i" not in argv_for("task", "-w", str(tmp_path), workdir=tmp_path)
+    assert "-i" in argv_for("task", "-w", str(tmp_path), "--stdin", workdir=tmp_path)

@@ -97,6 +97,12 @@ COMMANDS = (
 # and anything under it.
 WORKDIR_DEST = "/work"
 
+# Where --socket lands, and the variable naming it. Outside the work mount,
+# because the agent writes the work mount and the socket is what reaches the
+# host: a path the agent owns is a path it can replace.
+SOCKET_DEST = "/run/sanduk/agent.sock"
+SOCKET_ENV = "SANDUK_SOCKET"
+
 # What a mode is, in the two properties that differ: whether the host keeps the
 # key, and whether the container has a route off the host. The fourth
 # combination -- the key in the container, no route to any provider -- is a run
@@ -219,6 +225,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="host directory bind-mounted at /work (default: ./work)",
     )
     p.add_argument(
+        "--work-at-host-path",
+        action="store_true",
+        help="mount the workdir at its own host path instead of /work, so an "
+        "absolute path in a diff, a report or a stack trace resolves on the host",
+    )
+    p.add_argument(
         "-o", "--report", type=Path, help="copy the agent's REPORT.md here after the run"
     )
     p.add_argument(
@@ -295,6 +307,37 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="point the agent at this endpoint directly, without a relay",
     )
     g.add_argument("--network", help="attach to this container network")
+    g.add_argument(
+        "--user",
+        metavar="UID[:GID]",
+        help="run the agent as this uid, or `host` for the caller's own. "
+        "Docker only; without it the image's user is the one it was built with",
+    )
+    g.add_argument(
+        "--socket",
+        metavar="HOST[:DEST]",
+        help=f"bind-mount one unix socket into the container (default dest: "
+        f"{SOCKET_DEST}). Its path is exported as {SOCKET_ENV}",
+    )
+    g.add_argument(
+        "--socket-env",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="export the socket's container path under this name too (repeatable)",
+    )
+    g.add_argument(
+        "--stdin",
+        action="store_true",
+        help="give the agent this process's stdin, so something can write to a "
+        "turn already under way",
+    )
+    g.add_argument(
+        "--stream-json",
+        action="store_true",
+        help="copy the agent's output stream to stdout, verbatim and unparsed. "
+        "Implies --quiet: the per-event trace would interleave with it",
+    )
     g.add_argument(
         "--oci-runtime",
         metavar="NAME",
@@ -954,7 +997,19 @@ def container_env_names(args: argparse.Namespace, provider: Provider) -> tuple[s
     return wiring.key_env, wiring.base_url_env
 
 
-def parse_mounts(values: list[str]) -> list[Mount]:
+def work_dest(args: argparse.Namespace, workdir: Path) -> str:
+    """Where -w lands inside the container.
+
+    `--work-at-host-path` mounts it at its own host path, which is what makes
+    an absolute path in a review, a patch or a stack trace resolve for the
+    person reading it on the host.
+    """
+    if getattr(args, "work_at_host_path", False):
+        return str(workdir)
+    return WORKDIR_DEST
+
+
+def parse_mounts(values: list[str], dest_of_work: str = WORKDIR_DEST) -> list[Mount]:
     """`HOST:DEST[:ro]` per `--mount`.
 
     Refused: a host directory that is not there, a destination that is not
@@ -977,9 +1032,9 @@ def parse_mounts(values: list[str]) -> list[Mount]:
             raise AgentboxError(f"--mount {value!r}: {host} is not a directory")
         if not dest.startswith("/") or dest == "/":
             raise AgentboxError(f"--mount {value!r}: {dest} is not an absolute path")
-        if dest == WORKDIR_DEST or dest.startswith(WORKDIR_DEST + "/"):
+        if dest == dest_of_work or dest.startswith(dest_of_work + "/"):
             raise AgentboxError(
-                f"--mount {value!r}: {WORKDIR_DEST} is where -w lands; a mount "
+                f"--mount {value!r}: {dest_of_work} is where -w lands; a mount "
                 f"there would shadow the directory the agent was given"
             )
         if dest in claimed:
@@ -989,6 +1044,102 @@ def parse_mounts(values: list[str]) -> list[Mount]:
         claimed[dest] = host
         mounts.append(Mount(host=host, dest=dest, ro=mode == "ro"))
     return mounts
+
+
+def parse_socket(
+    value: str | None, dest_of_work: str, workdir: Path, mounts: list[Mount]
+) -> Mount | None:
+    """`HOST[:DEST]` per `--socket`: one unix socket the container may reach.
+
+    The socket is the only thing in the container that reaches the host, so
+    what it is and where it lands are both checked here. It may not land in the
+    work mount or in another mount: the agent writes those, and a socket it can
+    unlink and replace is a socket it can put a listener of its own at.
+    """
+    if not value:
+        return None
+    host_text, _, dest = value.partition(":")
+    dest = dest or SOCKET_DEST
+    host = Path(host_text).expanduser().resolve()
+
+    if not dest.startswith("/") or dest == "/":
+        raise AgentboxError(f"--socket {value!r}: {dest} is not an absolute path")
+    if not host.exists():
+        raise AgentboxError(f"--socket {value!r}: {host} is not there")
+    if not stat.S_ISSOCK(host.stat().st_mode):
+        raise AgentboxError(f"--socket {value!r}: {host} is not a unix socket")
+    if dest == dest_of_work or dest.startswith(dest_of_work.rstrip("/") + "/"):
+        raise AgentboxError(
+            f"--socket {value!r}: {dest} is inside {dest_of_work}, which the "
+            f"agent writes. Mount the socket outside the work mount."
+        )
+    for other, where in [(workdir, "-w"), *((m.host, "--mount") for m in mounts)]:
+        if host == other or host.is_relative_to(other):
+            raise AgentboxError(
+                f"--socket {value!r}: {host} is inside {other}, which {where} "
+                f"puts in the container: the agent could replace the socket "
+                f"with a listener of its own. Keep it outside."
+            )
+    return Mount(host=host, dest=dest)
+
+
+def container_user(args: argparse.Namespace, runtime: Runtime) -> str | None:
+    """`--user`, as the engine spells it, or None for the image's own user.
+
+    `host` is the caller's own uid and gid, which is what makes a bind mount
+    writable when the image was built for somebody else.
+    """
+    value: str | None = getattr(args, "user", None)
+    if not value:
+        return None
+    if not runtime.takes_user:
+        raise AgentboxError(
+            f"--user needs --runtime docker: {runtime.name} runs the image's "
+            f"own user. Rebuild the image for that uid instead."
+        )
+    if value == "host":
+        return f"{os.getuid()}:{os.getgid()}"
+    if not re.fullmatch(r"\d+(:\d+)?", value):
+        raise AgentboxError(f"--user {value!r}: expected UID[:GID], or `host`")
+    if value.split(":")[0] == "0":
+        raise AgentboxError(
+            "--user 0: sanduk runs no agent as root. The socket's file mode is "
+            "the gate on it, and root ignores a file mode."
+        )
+    return value
+
+
+def requested_uid(args: argparse.Namespace) -> int | None:
+    """The uid `--user` asks for, without deciding whether the engine takes it."""
+    value: str | None = getattr(args, "user", None)
+    if not value:
+        return None
+    if value == "host":
+        return os.getuid()
+    head = value.split(":")[0]
+    return int(head) if head.isdigit() else None
+
+
+def check_socket_reachable(socket: Mount | None, uid: int | None) -> None:
+    """Refuse a socket the agent's uid cannot open.
+
+    The socket is the credential in this design, so its mode is the gate on it
+    and a run whose agent is not the uid that gate admits fails at its first
+    call rather than at start. Only a sure refusal stops a run: a mode that
+    grants the group or the world lets in a uid this cannot check.
+    """
+    if socket is None or uid is None:
+        return
+    info = socket.host.stat()
+    if info.st_mode & (stat.S_IRGRP | stat.S_IROTH | stat.S_IWGRP | stat.S_IWOTH):
+        return
+    if info.st_uid == uid:
+        return
+    raise AgentboxError(
+        f"--socket {socket.host} is owned by uid {info.st_uid} and its mode "
+        f"admits only its owner, but the agent runs as uid {uid}. Create the "
+        f"socket as that uid, or run as its owner."
+    )
 
 
 def check_log_dir(log_dir: Path, workdir: Path, mounts: list[Mount]) -> None:
@@ -1018,6 +1169,8 @@ def build_spec(
     task: str,
     network: str | None = None,
     mounts: list[Mount] | None = None,
+    socket: Mount | None = None,
+    user: str | None = None,
 ) -> ContainerSpec:
     """Map parsed flags onto one engine-neutral container description."""
     inherit = [wiring.key_env]
@@ -1026,20 +1179,42 @@ def build_spec(
     # child_env in run), so neither appears in this argv or in `ps`.
     if wiring.base_url:
         inherit.append(wiring.base_url_env)
+    dest = work_dest(args, workdir)
+    if mounts is None:
+        mounts = parse_mounts(getattr(args, "mount", []), dest)
+    if socket is None:
+        socket = parse_socket(getattr(args, "socket", None), dest, workdir, mounts)
+    if socket is not None:
+        mounts = [*mounts, socket]
     return ContainerSpec(
         name=name,
         image=sel.image,
         command=sel.agent.argv(args, sel.provider, task, wiring),
         cpus=args.cpus,
         memory=args.memory,
-        mount=(workdir, WORKDIR_DEST),
-        mounts=parse_mounts(getattr(args, "mount", [])) if mounts is None else mounts,
+        mount=(workdir, dest),
+        mounts=mounts,
         inherit_env=inherit,
         # The agent's own settings first, so an explicit -e can override one.
-        env=[f"{k}={v}" for k, v in wiring.env.items()] + list(args.env),
+        env=[f"{k}={v}" for k, v in wiring.env.items()]
+        + socket_env(socket, getattr(args, "socket_env", []))
+        + list(args.env),
         network=network,
         oci_runtime=args.oci_runtime,
+        user=user,
+        stdin=getattr(args, "stdin", False),
     )
+
+
+def socket_env(socket: Mount | None, extra: list[str]) -> list[str]:
+    """Where the socket is, under its own name and any the caller asked for.
+
+    The container is told the path rather than having it compiled in, so the
+    program that reaches the socket takes no flag and holds no default.
+    """
+    if socket is None:
+        return []
+    return [f"{name}={socket.dest}" for name in [SOCKET_ENV, *extra]]
 
 
 def read_task(args: argparse.Namespace) -> str:
@@ -1066,20 +1241,38 @@ def _exit_on_signal(signum: int, _frame: object) -> None:
 
 
 def ensure_image(
-    runtime: Runtime, args: argparse.Namespace, sel: Selection, workdir: Path
+    runtime: Runtime,
+    args: argparse.Namespace,
+    sel: Selection,
+    workdir: Path,
+    socket: Mount | None = None,
 ) -> None:
     """Build the image if it is missing, then refuse one whose agent cannot
-    write `workdir`. Before any container starts: an agent that cannot write
-    its report still spends the whole run's tokens."""
+    write `workdir` or open `socket`. Before any container starts: an agent
+    that cannot write its report still spends the whole run's tokens."""
     if args.rebuild or not runtime.image_exists(sel.image):
         build_image(runtime, sel.build)
     if not runtime.keeps_mount_owner:
         return
-    uid = runtime.image_uid(sel.image)
+    uid = requested_uid(args)
+    if uid is not None:
+        built_as = runtime.image_uid(sel.image)
+        if built_as is not None and built_as != uid:
+            # Not a refusal: a recipe may leave a writable home, and this is
+            # the only way to run an image somebody else built. It is the
+            # failure a mid-run "permission denied" would not explain.
+            note(
+                f"--user {uid} is not the uid {sel.image} was built for "
+                f"({built_as}); anything the agent writes under its home may "
+                f"be refused"
+            )
+    if uid is None:
+        uid = runtime.image_uid(sel.image)
     if uid is None:
         # A shipped image built before the label ran as 1000. Anything else
         # may run as anyone, so it is not refused on a guess.
         if args.image or args.containerfile or not isinstance(sel.agent, BUILTIN):
+            check_socket_reachable(socket, None)
             return
         uid = 1000
     try:
@@ -1091,6 +1284,7 @@ def ensure_image(
         if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
             return
         owner = st.st_uid
+    check_socket_reachable(socket, uid)
     if uid == owner:
         return
     if owner == 0:
@@ -1136,7 +1330,10 @@ def run(args: argparse.Namespace) -> int:
     workdir = args.workdir.resolve()
     # Parsed here, not in build_spec: build_spec runs after the holder is up and
     # the relay is bound, and a --mount it refused there left both behind.
-    mounts = parse_mounts(getattr(args, "mount", []))
+    dest = work_dest(args, workdir)
+    mounts = parse_mounts(getattr(args, "mount", []), dest)
+    socket = parse_socket(args.socket, dest, workdir, mounts)
+    user = container_user(args, runtime)
     if args.log_bodies:
         check_log_dir(args.log_dir, workdir, mounts)
 
@@ -1171,7 +1368,7 @@ def run(args: argparse.Namespace) -> int:
         gateway, _ = runtime.ensure_network(network, internal=not args.egress)
         token = secrets.token_urlsafe(24)
         if not args.dry_run:
-            ensure_image(runtime, args, sel, workdir)
+            ensure_image(runtime, args, sel, workdir, socket)
             record = claim(args.runtime, name)
             # Outlive the run: the holder going first takes the bridge, and
             # the relay's address, with it.
@@ -1203,7 +1400,9 @@ def run(args: argparse.Namespace) -> int:
             child_env[wiring.base_url_env] = wiring.base_url
 
         cmd = runtime.run_argv(
-            build_spec(args, sel, wiring, name, workdir, task, network, mounts)
+            build_spec(
+                args, sel, wiring, name, workdir, task, network, mounts, socket, user
+            )
         )
 
         if args.dry_run:
@@ -1218,7 +1417,7 @@ def run(args: argparse.Namespace) -> int:
 
         runtime.require_run()
         if not args.proxy:  # the relayed path settled its image above
-            ensure_image(runtime, args, sel, workdir)
+            ensure_image(runtime, args, sel, workdir, socket)
         # Not before the dry-run return above, and not before the key check:
         # until a run is about to start, the previous report is still the only
         # result there is, and a command that only prints its argv must not
@@ -1254,7 +1453,17 @@ def run(args: argparse.Namespace) -> int:
     handlers = [(s, signal.signal(s, _exit_on_signal)) for s in TEARDOWN_SIGNALS]
     failure = ""
     try:
-        outcome, rc = launch(sel.agent, cmd, args.timeout, args.quiet, env=child_env)
+        outcome, rc = launch(
+            sel.agent,
+            cmd,
+            args.timeout,
+            # The trace and the stream both go to stdout, and a reader parsing
+            # one out of the other is exactly what --stream-json exists to avoid.
+            args.quiet or args.stream_json,
+            env=child_env,
+            attach_stdin=args.stdin,
+            passthrough=sys.stdout if args.stream_json else None,
+        )
     except (KeyboardInterrupt, SystemExit) as e:
         runtime.destroy(name)
         code = e.code if isinstance(e, SystemExit) and isinstance(e.code, int) else 130

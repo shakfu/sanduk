@@ -4,6 +4,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `--work-at-host-path` mounts `-w` at its own host path rather than at `/work`, so an absolute path in a diff, a report or a stack trace resolves for whoever reads it on the host. A `--work-dest PATH` would allow the same thing and allow it to be pointed at the wrong path; a boolean cannot.
+
+- `--socket HOST[:DEST]` bind-mounts one unix socket into the container, by default at `/run/sanduk/agent.sock`, and exports that path as `SANDUK_SOCKET` and as any `--socket-env NAME`. A socket that comes from inside `-w` or a `--mount`, or that lands inside the work mount, is refused: the agent writes those, and a socket it can unlink is one it can replace with a listener of its own. A socket whose mode admits its owner alone, opposite an agent running as another uid, is refused beside the workdir check rather than at the run's first call.
+
+- `--user UID[:GID]`, or `--user host` for the caller's own, runs the agent as that uid. Docker only, since Apple's engine runs the image's user, and refused for uid 0 because a file mode is what guards a mounted socket and root ignores one. A uid that is not the one the image was built for is noted rather than refused: what it breaks is writing under the agent's home, which a recipe may leave open.
+
+- `--stdin` gives the agent this process's stdin, which is the only way to reach a turn already running, and `--stream-json` copies the agent's output verbatim before it is parsed. `--stream-json` implies `--quiet`, because the per-event trace and the stream share stdout.
+
+  None of the four has run against a container engine yet. The tests assert the argv and `--dry-run` renders it; whether an engine accepts a socket file bind-mounted at a path the image does not have is the first thing `make test-container` has to show.
+
 ### Changed
 
 - The README has a `What is tested` table, and `--oci-runtime` no longer offers Kata as an example. The flag passes any name to `docker run --runtime`, so naming `io.containerd.kata.v2` read as advice for a runtime nobody here has started; `runsc` is the one measured, in CI on every push.

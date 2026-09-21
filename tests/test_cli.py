@@ -594,10 +594,10 @@ def socket_at(path):
     return s
 
 
-def test_a_socket_the_agents_uid_cannot_open_is_refused_before_the_run(tmp_path):
+def test_a_socket_the_agents_uid_cannot_open_is_refused_before_the_run(short_tmp):
     """The socket's mode is the gate, so a uid that gate does not admit is a
     run that fails at its first call rather than at its start."""
-    sock = tmp_path / "run.sock"
+    sock = short_tmp / "run.sock"
     with socket_at(sock), pytest.raises(AgentboxError, match="admits only its owner"):
         check(
             OwnerEngine(uid=os.getuid() + 1),
@@ -606,8 +606,8 @@ def test_a_socket_the_agents_uid_cannot_open_is_refused_before_the_run(tmp_path)
         )
 
 
-def test_a_socket_the_agent_owns_passes(tmp_path):
-    sock = tmp_path / "run.sock"
+def test_a_socket_the_agent_owns_passes(short_tmp):
+    sock = short_tmp / "run.sock"
     with socket_at(sock):
         check(
             OwnerEngine(uid=os.getuid()),
@@ -616,10 +616,10 @@ def test_a_socket_the_agent_owns_passes(tmp_path):
         )
 
 
-def test_a_socket_open_to_the_group_is_not_refused_on_a_uid(tmp_path):
+def test_a_socket_open_to_the_group_is_not_refused_on_a_uid(short_tmp):
     """Only a sure refusal stops a run: a mode that grants the group lets in a
     uid this check cannot see."""
-    sock = tmp_path / "run.sock"
+    sock = short_tmp / "run.sock"
     with socket_at(sock):
         sock.chmod(0o660)
         check(

@@ -640,10 +640,10 @@ def test_a_mount_under_the_host_path_workdir_is_still_refused(tmp_path):
         )
 
 
-def test_the_socket_is_mounted_and_named_in_the_environment(tmp_path):
-    work = tmp_path / "work"
+def test_the_socket_is_mounted_and_named_in_the_environment(short_tmp):
+    work = short_tmp / "work"
     work.mkdir()
-    sock = tmp_path / "run.sock"
+    sock = short_tmp / "run.sock"
     with unix_socket(sock):
         argv = argv_for(
             "task",
@@ -661,10 +661,10 @@ def test_the_socket_is_mounted_and_named_in_the_environment(tmp_path):
     assert "MINOS_SOCKET=/run/sanduk/agent.sock" in argv
 
 
-def test_the_socket_takes_the_destination_it_is_given(tmp_path):
-    work = tmp_path / "work"
+def test_the_socket_takes_the_destination_it_is_given(short_tmp):
+    work = short_tmp / "work"
     work.mkdir()
-    sock = tmp_path / "run.sock"
+    sock = short_tmp / "run.sock"
     with unix_socket(sock):
         argv = argv_for(
             "task", "-w", str(work), "--socket", f"{sock}:/run/minos.sock", workdir=work
@@ -673,17 +673,17 @@ def test_the_socket_takes_the_destination_it_is_given(tmp_path):
     assert "SANDUK_SOCKET=/run/minos.sock" in argv
 
 
-def test_a_socket_inside_the_work_mount_is_refused(tmp_path):
+def test_a_socket_inside_the_work_mount_is_refused(short_tmp):
     """The agent writes the work mount: a socket there is one it can replace."""
-    sock = tmp_path / "run.sock"
+    sock = short_tmp / "run.sock"
     with unix_socket(sock), pytest.raises(AgentboxError, match="Keep it outside"):
-        argv_for("task", "-w", str(tmp_path), "--socket", str(sock), workdir=tmp_path)
+        argv_for("task", "-w", str(short_tmp), "--socket", str(sock), workdir=short_tmp)
 
 
-def test_a_socket_landing_in_the_work_mount_is_refused(tmp_path):
-    work = tmp_path / "work"
+def test_a_socket_landing_in_the_work_mount_is_refused(short_tmp):
+    work = short_tmp / "work"
     work.mkdir()
-    sock = tmp_path / "run.sock"
+    sock = short_tmp / "run.sock"
     with unix_socket(sock), pytest.raises(AgentboxError, match="which the agent writes"):
         argv_for(
             "task", "-w", str(work), "--socket", f"{sock}:/work/run.sock", workdir=work
@@ -700,10 +700,13 @@ def test_something_that_is_not_a_socket_is_refused(tmp_path):
 
 
 def user_for(value):
-    """`--user` as the run path resolves it, against the default engine."""
+    """`--user` as the run path resolves it, against docker: the one engine
+    that takes it."""
     from sanduk.cli import container_user
 
-    return container_user(parse_args(["run", "task", "--user", value]), get_runtime())
+    return container_user(
+        parse_args(["run", "task", "--user", value]), get_runtime("docker")
+    )
 
 
 def test_the_user_is_rendered_before_the_image():

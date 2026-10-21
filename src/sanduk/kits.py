@@ -2,9 +2,8 @@
 
 A kit is a directory holding `kit.json`. Its identity is the SHA-256 of that
 file's bytes, which a recipe pins. `kit.json` in turn pins downloads by
-`sha256`, and every file of a vendored skill by its own hash, checked here when
-the kit is read. A file a `copy` tool takes from the kit directory is not
-pinned; see TODO.md.
+`sha256`, and every file of a vendored skill or `copy` tool by its own hash,
+checked here when the kit is read.
 
 One skill text serves every agent; the recipe's agent decides where it lands.
 See docs/dev/kits.md.
@@ -90,6 +89,10 @@ def load(spec: str, relative_to: Path | None = None) -> Kit:
         raise fail(where, f"name {name!r} must equal its directory, {path.parent.name!r}")
 
     tools = [section(s, where, path.parent) for s in data.get("tools", [])]
+    for t in tools:
+        # Required here, optional in a recipe: nothing pins a recipe's own files.
+        if t.type == "copy" and "sha256" not in t.raw:
+            raise fail(where, f"tool {t.name}: a kit's copy needs a sha256")
     unique([t.name for t in tools], where, "tool")
     skills = [skill(s, where, path.parent) for s in data.get("skills", [])]
     unique([s.name for s in skills], where, "skill")

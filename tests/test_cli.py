@@ -434,6 +434,7 @@ class StubEngine:
 
     def destroy(self, name, keep=False):
         self.destroyed.append(name)
+        return True
 
     def shell_argv(self, image):
         return ["stub", "run", "--rm", "-it", image]
@@ -1335,6 +1336,40 @@ def test_a_failed_start_gives_back_the_holder_and_the_relay(tmp_path, monkeypatc
     assert stopped == ["relay"]
     assert "sanduk-hold-0000" in engine.destroyed
     assert list(runs_dir().glob("*.json")) == []
+
+
+@pytest.mark.parametrize("deletes", [True, False])
+def test_a_relay_that_will_not_bind_gives_back_the_holder(tmp_path, monkeypatch, deletes):
+    """The relay was started outside the cleanup scope, so an OSError from its
+    bind or its --log-dir left the holder running and the record claimed."""
+
+    class Engine(StubEngine):
+        gateway_hint = ""
+
+        def ensure_network(self, name, internal=True):
+            return "10.0.0.1", "10.0.0.0/24"
+
+        def hold_network_up(self, network, image, seconds=None):
+            return "sanduk-hold-0000"
+
+        def destroy(self, name, keep=False):
+            super().destroy(name, keep)
+            return deletes
+
+    def no_bind(*a, **kw):
+        raise OSError(99, "Cannot assign requested address")
+
+    engine = Engine()
+    monkeypatch.setattr("sanduk.cli.get_runtime", lambda _: engine)
+    monkeypatch.setattr("sanduk.cli.wait_for_gateway", lambda gateway, **kw: True)
+    monkeypatch.setattr("sanduk.cli._start_relay", no_bind)
+    argv = ["run", "task", "-w", str(tmp_path), "--mode", "sealed", "--skip-key-check"]
+    assert main(argv) == 2
+    assert engine.destroyed == ["sanduk-hold-0000"]
+    records = [json.loads(p.read_text()) for p in runs_dir().glob("*.json")]
+    # A holder that would not delete stays recorded, with no owner to wait for.
+    held = [(r["pid"], "sanduk-hold-0000" in r["containers"]) for r in records]
+    assert held == ([] if deletes else [(0, True)])
 
 
 # --- what main turns into an exit code --------------------------------------

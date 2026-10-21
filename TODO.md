@@ -2,17 +2,11 @@
 
 Ordered by how much they would change a decision, not by effort.
 
-## Critical
-
-### Correctness
-
-- [ ] **A kit's `copy` files are not pinned.** `kit.json` pins downloads and skill files by hash, but a file a `copy` tool takes from the kit directory is read unchecked. Editing one changes the image tag and nothing refuses the build, so a catalogue update can change what runs in an image without a recipe edit, which is what the pin exists to prevent. Measured with an illustrative kit: an edited copied script built without complaint. The fix is a required `sha256` beside `from`, checked when the kit is read, as skill files are. Recipes' own `copy` sections come from the recipe's directory and are not pinned either; decide whether they should be.
-
-- [ ] **`--log-dir` is not checked against being inside the bind mount.** The default `./sanduk-logs` lands in `/work` under `-w .`, which hands the agent its own audit trail, and `--help` claims the opposite unconditionally. Body files are created with an ordinary `open(..., "wb")`, so a predictable future log name can also be pointed at a host path through a symlink. Resolve the directory against the workspace and every read-write `--mount`, and create entries `O_EXCL|O_NOFOLLOW`.
-
 ## High
 
-### Priority
+## Medium
+
+### Compressors
 
 - [ ] **Trial shell-output compressors with claude: none, rtk, snip.** Run one task through `--agent claude --provider anthropic --mode sealed` in three images: stock, with [rtk](https://github.com/rtk-ai/rtk), and with [snip](https://github.com/edouard-claude/snip). Both install a Claude Code PreToolUse hook. Build the two variants as kits: a pinned `binary` tool, `hook: true`, and a claude `setup` running the global `init`. Pick a test- and git-heavy task; neither tool shrinks file reads, so a review task shows little. Run each arm 3 times with a fixed `--model`, `--stats-file` and `--log-bodies`.
 
@@ -22,16 +16,6 @@ Ordered by how much they would change a decision, not by effort.
   - The relay log's per-call `in=`, `cache_write=`, `cache_read=` and `out=`, summed and priced at Anthropic's list rates. The stats line alone is not enough: it folds cache writes, billed above base input, into `in`.
 
   Also compare turns, wall time, and whether `REPORT.md` still finds what the stock arm found. Filters hide diff context and passing tests. Run with the default permission mode; a hook that allows its rewrite may bypass `--allowed-tools` (untested). See [docs/dev/compressors.md](docs/dev/compressors.md).
-
-### Correctness
-
-- [ ] **`sweep()` discards ownership when the engine is merely unreachable.** Both engines return an empty container list when their list command fails, so a stopped daemon looks like an engine with no containers and the records naming real ones are deleted. Reproduced with docker installed and its daemon down; the missing-binary case is already handled. `Runtime.destroy()` only logs a failed delete, and ordinary teardown releases its record without confirming the container is gone. In `--mode open` the container holds the real key, so one that is never reaped holds a credential for as long as it exists.
-
-- [ ] **Concurrent wakeups share one stats file.** Every wakeup writes `$XDG_STATE_HOME/sanduk/wakeup.json`, deleting it before the run and after reading it. Claims are per assistant, so two scheduler processes running different assistants collide: one deletes another's stats, reads its token totals, or has its result recorded against the wrong name. The documented cron entry runs `tick` every 10 minutes against a 900s default timeout, so overlapping passes are the default shape. Key the path on the database run id.
-
-- [ ] **The relay and holder are acquired outside the lifecycle cleanup block.** Both start before the `try/finally` around `launch()`, so a failure in mount validation, log-directory creation or relay binding leaves a holder container running and a relay listening. Mounts are validated only while building the container command, after all of it. `log_dir.mkdir` and the bind raise `OSError`, which is not `AgentboxError`, so it escapes `main()` past `tick` and `serve` and kills a long-lived scheduler outright. Validate static options first, then enclose every acquisition in one scope.
-
-- [ ] **Nothing checks that a network is actually internal.** `ensure_network` accepts any existing network with a gateway and subnet, and neither runtime's `network_info` returns the `internal` flag. A routable network left by a `key-safe` run is reused by a `sealed` run through the same `--proxy-network` name, and the CLI then prints "no route off the host" having checked nothing. Operator-triggered rather than agent-triggered, which is why it sits below the rest; the false assertion is the defect. Verifying a fix needs a real engine, so it lands in CI rather than `make test`.
 
 ### Performance
 
@@ -49,7 +33,6 @@ Ordered by how much they would change a decision, not by effort.
 
   For upstream: `--prime-agent-bootstrap` could install the built-in Python skills, and offline mode could imply `UV_OFFLINE`.
 
-## Medium
 
 ### Untested
 

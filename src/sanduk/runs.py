@@ -59,11 +59,11 @@ class Run:
     runtime: str
     containers: list[str]
 
-    def _write(self) -> None:
+    def _write(self, pid: int | None = None) -> None:
         self.path.write_text(
             json.dumps(
                 {
-                    "pid": os.getpid(),
+                    "pid": os.getpid() if pid is None else pid,
                     "runtime": self.runtime,
                     "containers": self.containers,
                 }
@@ -78,6 +78,17 @@ class Run:
     def release(self) -> None:
         """Give up the claim. The containers are gone, or deliberately kept."""
         self.path.unlink(missing_ok=True)
+
+    def close(self, gone: bool) -> None:
+        """Release the claim if every delete succeeded, else orphan it.
+
+        An orphaned record names no live owner, so the next sweep retries the
+        delete, even one run by this same long-lived `serve` process.
+        """
+        if gone:
+            self.release()
+        else:
+            self._write(pid=0)
 
 
 def claim(runtime: str, name: str) -> Run:
@@ -121,9 +132,9 @@ def live_containers() -> set[str]:
 def sweep() -> list[str]:
     """Delete the containers of every run whose owner is gone.
 
-    Returns what was deleted. A record naming an engine this host cannot reach
-    is left alone rather than dropped: the containers it names are still there,
-    and the engine may be back on the next run.
+    Returns what was deleted. A record naming an engine this host cannot reach,
+    or a container whose delete failed, is left for the next sweep: the
+    containers it names may still be there.
     """
     reaped: list[str] = []
     engines: dict[str, tuple[Runtime, set[str]]] = {}
@@ -139,11 +150,15 @@ def sweep() -> list[str]:
                 continue
             engines[name] = (engine, found)
         engine, found = engines[name]
+        gone = True
         for container in record.get("containers", []):
             if container not in found:
                 continue
             note(f"reaping {container}: the run that started it was killed")
-            engine.destroy(container)
-            reaped.append(container)
-        path.unlink(missing_ok=True)
+            if engine.destroy(container):
+                reaped.append(container)
+            else:
+                gone = False
+        if gone:
+            path.unlink(missing_ok=True)
     return reaped

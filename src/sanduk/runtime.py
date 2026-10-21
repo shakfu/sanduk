@@ -343,19 +343,21 @@ class Runtime:
         """Stop a container, leaving it on disk. Already stopped is not an error."""
         run([self.cli, "stop", name], capture_output=True)
 
-    def destroy(self, name: str, keep: bool = False) -> None:
+    def destroy(self, name: str, keep: bool = False) -> bool:
+        """Delete a container. False: it may still exist, so keep its record."""
         if keep:
             note(
                 f"keeping container {name} (`{self.cli} inspect {name}` exposes "
                 f"the API key; `{self.cli} {self.delete_verb} {name}` when done)"
             )
-            return
+            return True
         self.stop(name)
         r = run([self.cli, self.delete_verb, name], capture_output=True)
         if r.returncode != 0:
             note(f"could not delete {name}: {r.stderr.strip()}")
-        else:
-            note(f"deleted {name}")
+            return False
+        note(f"deleted {name}")
+        return True
 
 
 class AppleContainer(Runtime):

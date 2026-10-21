@@ -221,7 +221,7 @@ sanduk build --recipe claude-docs --dry-run                                     
 ```
 
 - A recipe pins each kit by the SHA-256 of its `kit.json`, as `sanduk list kits` prints it. A changed kit stops the build.
-- `kit.json` pins every download and every skill file by its own hash, so the recipe's pin covers them too. A file a kit's `copy` tool takes from the kit directory is not pinned yet.
+- `kit.json` pins every download, skill file and `copy` source by its own hash, so the recipe's pin covers them too.
 - Recipes inherit by name, left to right. A child can `remove` inherited kits, sections, env keys or section types.
 - `instructions` in a recipe is standing guidance for the agent: a path relative to the recipe, or `{"text": "..."}`. It is written read-only to the agent's user-level `CLAUDE.md` or `AGENTS.md`, so every run reads it beside any in the repository. A child's instructions follow its parents'. claude, codex, hax, minima, opencode, pi and prime support it; hermes refuses it. `--bare` is refused beside it.
 - A kit's skills land where the agent reads skills: `~/.claude/skills` for claude, `~/.agents/skills` for codex, hax, opencode and pi, `~/.config/minima/skills` for minima, `~/.hermes/skills` for hermes. They are root-owned and read-only. Where prime reads them is unconfirmed, so a kit with skills is refused for it.

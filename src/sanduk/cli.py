@@ -1356,39 +1356,38 @@ def run(args: argparse.Namespace) -> int:
         """Give back the relay, the holder and the record, on a failed start."""
         if proxy_srv:
             proxy_srv.shutdown()
-        if holder:
-            runtime.destroy(holder)
+        held = runtime.destroy(holder) if holder else True
         if record:
-            record.release()
+            record.close(held)
 
-    if args.proxy:
-        runtime.require_run()
-        firewall_warning()
-        network = args.proxy_network
-        gateway, _ = runtime.ensure_network(network, internal=not args.egress)
-        token = secrets.token_urlsafe(24)
-        if not args.dry_run:
-            ensure_image(runtime, args, sel, workdir, socket)
-            record = claim(args.runtime, name)
-            # Outlive the run: the holder going first takes the bridge, and
-            # the relay's address, with it.
-            holder = runtime.hold_network_up(
-                network, sel.image, args.timeout + HOLDER_MARGIN
-            )
-            if holder:
-                record.add(holder)
-            if not wait_for_gateway(gateway):
-                drop_resources()
-                raise AgentboxError(
-                    f"{gateway} never became bindable on this host.{runtime.gateway_hint}"
-                )
-            proxy_srv, port = _start_relay(args, key, token, gateway, name, provider)
-
-    # Everything from here to the run's own try/finally can raise, and until
-    # this block existed nothing gave back what the proxy block above took: an
-    # image that would not build, or a workdir that would not mkdir, left the
-    # holder running, the relay listening on the bridge and the record unowned.
+    # Everything from here to the run's own try/finally can raise: an engine
+    # that refuses the holder, a gateway that never binds, a --log-dir that
+    # will not mkdir, an image that will not build. Each acquisition is inside
+    # this one scope, so none of them leaves the others behind.
     try:
+        if args.proxy:
+            runtime.require_run()
+            firewall_warning()
+            network = args.proxy_network
+            gateway, _ = runtime.ensure_network(network, internal=not args.egress)
+            token = secrets.token_urlsafe(24)
+            if not args.dry_run:
+                ensure_image(runtime, args, sel, workdir, socket)
+                record = claim(args.runtime, name)
+                # Outlive the run: the holder going first takes the bridge, and
+                # the relay's address, with it.
+                holder = runtime.hold_network_up(
+                    network, sel.image, args.timeout + HOLDER_MARGIN
+                )
+                if holder:
+                    record.add(holder)
+                if not wait_for_gateway(gateway):
+                    raise AgentboxError(
+                        f"{gateway} never became bindable on this host."
+                        f"{runtime.gateway_hint}"
+                    )
+                proxy_srv, port = _start_relay(args, key, token, gateway, name, provider)
+
         wiring = sel.agent.wire(args, provider, relay_root(args, gateway, port))
         # In proxy mode the container gets the run token; the real key stays in
         # this process and in the proxy thread. Either way the value comes from
@@ -1452,6 +1451,9 @@ def run(args: argparse.Namespace) -> int:
     # handlers have to survive a wakeup.
     handlers = [(s, signal.signal(s, _exit_on_signal)) for s in TEARDOWN_SIGNALS]
     failure = ""
+    # False until a delete succeeds: an exception launch() was not written for
+    # leaves the container's record for the next sweep rather than dropping it.
+    gone = False
     try:
         outcome, rc = launch(
             sel.agent,
@@ -1465,28 +1467,28 @@ def run(args: argparse.Namespace) -> int:
             passthrough=sys.stdout if args.stream_json else None,
         )
     except (KeyboardInterrupt, SystemExit) as e:
-        runtime.destroy(name)
+        gone = runtime.destroy(name)
         code = e.code if isinstance(e, SystemExit) and isinstance(e.code, int) else 130
         raise AgentboxError("interrupted", code=code) from None
     except AgentboxError as e:
         # A timeout kill must not leave a container alive holding the key. The
         # run is still recorded below, so a wakeup that timed out says so.
-        runtime.destroy(name)
+        gone = runtime.destroy(name)
         outcome, rc, failure = None, e.code, str(e)
     else:
         # Before the record is released, so a kill in between still leaves the
         # container owned and reapable.
-        runtime.destroy(name, args.keep)
+        gone = runtime.destroy(name, args.keep)
     finally:
         if proxy_srv:
             proxy_srv.shutdown()
             cfg = proxy_srv.cfg
             spent = f", ${cfg.spent:.4f} spent" if cfg.provider.cost_field else ""
             note(f"proxy relayed {cfg.requests}, rejected {cfg.rejected}{spent}")
-        if holder:
-            runtime.destroy(holder)
+        if holder and not runtime.destroy(holder):
+            gone = False
         if record:
-            record.release()
+            record.close(gone)
         for signum, handler in handlers:
             signal.signal(signum, handler)
 

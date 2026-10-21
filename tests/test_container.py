@@ -152,6 +152,21 @@ def test_internal_network_blocks_egress(isolated_network):
     assert r.stdout.split() == ["000", "000"], r.stdout
 
 
+def test_a_routable_network_is_refused_for_a_sealed_run():
+    """The unit tests feed `network_internal` a canned inspect; this reads the
+    engine's own. Apple's reports nothing, and the CLI refuses by name there."""
+    name = f"sanduk-routable-{os.urandom(3).hex()}"
+    ENGINE.ensure_network(name, internal=False)
+    try:
+        if ENGINE.network_internal(name) is None:
+            pytest.skip(f"{ENGINE.name} does not report whether a network is internal")
+        assert ENGINE.network_internal(name) is False
+        with pytest.raises(AgentboxError, match="route off the host"):
+            ENGINE.ensure_network(name, internal=True)
+    finally:
+        ENGINE.delete_network(name)
+
+
 def test_host_gateway_is_reachable_from_the_isolated_network(isolated_network):
     """If this fails the macOS firewall is blocking this interpreter."""
     srv, port = proxy.start_proxy(FAKE_KEY, "tok", isolated_network)

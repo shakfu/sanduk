@@ -77,7 +77,7 @@ Recipes and kits share these types.
 | `pip` | `install: ["pkg==version"]`, `flags` | `pip install --no-cache-dir`; an exact version is required |
 | `binary` | `artifacts.<arch>`: `url`, `sha256`, optional `member`; `path` | fetch, verify, install one file to `path`, default `/usr/local/bin/<name>`. `member` names it inside a `.tar.gz` |
 | `archive` | `artifacts.<arch>`: `url`, `sha256`, optional `strip`; `dest`; `links` | fetch, verify, extract a tree to `dest`, symlink `links` onto `PATH` |
-| `copy` | `from` (a file, relative to the JSON file), `to`, `mode` | `COPY` from the build context |
+| `copy` | `from` (a file, relative to the JSON file), `to`, `mode`, `sha256` | `COPY` from the build context. `sha256` is required in a kit, optional in a recipe |
 | `run` | `lines: [str]`, `user: "root" \| "agent"` | a script in the build context, run with `sh -eu`. The escape hatch; flagged in listings |
 
 Every section has `name` and optional `description`. `<arch>` is `amd64` or `arm64`, matched against `dpkg --print-architecture`, or `uname -m` where there is no dpkg. A `run` script is written to the context rather than spliced into a RUN line, so no quoting rule applies to it; it stays in the image under `/usr/local/share/sanduk/steps`.
@@ -196,7 +196,7 @@ recipe claude-docs pins kit docs at 9b1c...e04a, but
 ~/.config/sanduk/kits/docs/kit.json is 51f7...a9c2
 ```
 
-The pin covers the whole kit only if `kit.json` pins everything else the kit uses. Downloads already carry `sha256`. Vendored skill files must too; see [Kit fields](#fields-1). Files a `copy` tool takes from the kit directory do not yet, so the pin does not cover them; see [TODO.md](../../TODO.md). A byte-level hash also fails on a whitespace-only edit. That is the price of a hash `sha256sum` can reproduce.
+The pin covers the whole kit only if `kit.json` pins everything else the kit uses. Downloads already carry `sha256`. Vendored skill files and `copy` sources must too; see [Kit fields](#fields-1). A recipe's own `copy` sources need no `sha256`: nothing pins a recipe, so a file beside it is no less trusted than the recipe itself. A byte-level hash also fails on a whitespace-only edit. That is the price of a hash `sha256sum` can reproduce.
 
 Consequences:
 
@@ -302,7 +302,7 @@ Not shipped. `rtk init -g` may prompt; a non-interactive flag is UNCONFIRMED.
 | Field | Meaning |
 |-|-|
 | `name`, `description` | `name` equals the directory name |
-| `tools` | sections |
+| `tools` | sections; a `copy` tool needs `sha256` |
 | `skills` | `path` (a `SKILL.md` directory in the kit) with `files`, a map of every file under it to its SHA-256; or `url` + `sha256` + `name` |
 | `env` | `ENV` lines |
 | `agents` | per-agent `setup` argv lists, run as the agent user. If present, only these agents are supported |
@@ -310,7 +310,7 @@ Not shipped. `rtk init -g` may prompt; a non-interactive flag is UNCONFIRMED.
 | `provides` | capability names; two kits with a shared name are refused |
 | `hook` | `true` if the kit changes how the agent runs commands |
 
-A kit does not include other kits; recipes compose kits. A kit's identity is the SHA-256 of `kit.json`, so it has no version field; its tools carry their own. A file under a skill `path` that is missing from `files`, or whose hash differs, is refused. That keeps the recipe's pin transitive.
+A kit does not include other kits; recipes compose kits. A kit's identity is the SHA-256 of `kit.json`, so it has no version field; its tools carry their own. A file under a skill `path` that is missing from `files`, or whose hash differs, is refused, as is a `copy` source whose hash differs. That keeps the recipe's pin transitive.
 
 ## Instruction files
 

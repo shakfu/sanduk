@@ -22,6 +22,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `--oci-runtime` says that the pid ceiling may not hold. `Docker.hardening` renders `--pids-limit 1024` whatever starts the container, and Kata drops the field in both its runtimes ([kata-containers#13824](https://github.com/kata-containers/kata-containers/issues/13824)), so under a VM a fork bomb is bounded by the guest's memory instead. The line is printed for any `--oci-runtime`, not for a list of names: the flag takes whatever `daemon.json` calls the runtime. See [docs/dev/microvms.md](docs/dev/microvms.md).
 
+### Fixed
+
+- A kit's `copy` source is pinned. `kit.json` pinned downloads and skill files but not a file a `copy` tool took from the kit directory, so editing one built a new image under an unchanged recipe pin. A kit's `copy` now needs a `sha256`, checked when the kit is read and again when the file enters the build context. A kit without one is refused. A recipe's `copy` takes an optional `sha256`: nothing pins a recipe, so a file beside it is as trusted as the recipe.
+
+- A container whose delete fails keeps its run record. Teardown and `sweep` both dropped the record after `destroy`, which only logged a failure, so a container still holding the run token, or the key under `open`, was no longer reapable. The record is now rewritten with no owner pid, so the next sweep retries, including one in the same `serve` process. A run that `launch` leaves by an unexpected exception keeps its record the same way.
+
+- The holder, the relay and its `--log-dir` are acquired inside the run's cleanup scope. 0.3.1 covered the span after the relay bound, not the relayed setup itself, so an `OSError` from the relay's bind or `mkdir` left the holder running and its record claimed.
+
 ## [0.3.1]
 
 ### Fixed

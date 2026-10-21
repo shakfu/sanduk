@@ -124,6 +124,7 @@ class Engine:
 
     def destroy(self, name, keep=False):
         self.destroyed.append(name)
+        return True
 
 
 @pytest.fixture

@@ -9,6 +9,7 @@ so no quoting rule stands between the author and the shell they wrote.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shlex
@@ -42,7 +43,7 @@ KEYS = {
     "pip": {"install", "flags"},
     "binary": {"artifacts", "path"},
     "archive": {"artifacts", "dest", "links"},
-    "copy": {"from", "to", "mode"},
+    "copy": {"from", "to", "mode", "sha256"},
     "run": {"lines", "user"},
 }
 
@@ -174,11 +175,23 @@ def section(raw: object, where: str, base: Path) -> Section:
         path_value(raw.get("to"), where, "to", absolute=True)
         if "mode" in raw:
             matching(raw["mode"], MODE_RE, where, "mode")
+        if "sha256" in raw:
+            expected = matching(raw["sha256"], SHA256_RE, where, "sha256")
+            copied(resolved, expected, where)
     else:
         strings(raw.get("lines"), where, "lines")
         if raw.get("user", "root") not in ("root", "agent"):
             raise fail(where, 'user must be "root" or "agent"')
     return Section(name=name, type=kind, raw=raw, base=base)
+
+
+def copied(path: Path, expected: str | None, where: str) -> bytes:
+    """A `copy` source's bytes, refused if they no longer match its pin."""
+    data = path.read_bytes()
+    actual = hashlib.sha256(data).hexdigest()
+    if expected is not None and actual != expected:
+        raise fail(where, f"{path.name} is {actual}, but its sha256 is {expected}")
+    return data
 
 
 def artifacts(value: object, where: str, kind: str) -> None:
@@ -308,9 +321,9 @@ def render(s: Section, owner: str, ctx: Context) -> list[str]:
         body = run_line(pieces).splitlines()
     elif s.type == "copy":
         source = Path(raw["from"])
-        rel = ctx.add(
-            f"files/{owner}/{s.name}/{source.name}", (s.base / source).read_bytes()
-        )
+        # Checked again here: the file may have changed since it was read.
+        data = copied(s.base / source, raw.get("sha256"), f"{owner}: {s.name}")
+        rel = ctx.add(f"files/{owner}/{s.name}/{source.name}", data)
         body = [f"COPY {rel} {raw['to']}"]
         if "mode" in raw:
             body.append(f"RUN chmod {raw['mode']} {raw['to']}")

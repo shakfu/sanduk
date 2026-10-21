@@ -19,6 +19,7 @@ class StubEngine:
         self.containers = list(containers)
         self.reachable = reachable
         self.destroyed = []
+        self.undeletable = set()
 
     def list_containers(self, prefix=""):
         if not self.reachable:
@@ -31,6 +32,7 @@ class StubEngine:
 
     def destroy(self, name, keep=False):
         self.destroyed.append(name)
+        return name not in self.undeletable
 
 
 @pytest.fixture
@@ -110,6 +112,25 @@ def test_an_unreachable_engine_keeps_the_record(state, monkeypatch):
     rewrite("sanduk-abcd", pid=dead_pid())
     assert sweep() == []
     assert (runs_dir() / "sanduk-abcd.json").exists()
+
+
+def test_a_failed_reap_keeps_the_record_for_the_next_sweep(state, engine):
+    engine.undeletable = {"sanduk-hold-ef"}
+    claim("apple", "sanduk-abcd").add("sanduk-hold-ef")
+    rewrite("sanduk-abcd", pid=dead_pid())
+    assert sweep() == ["sanduk-abcd"]
+    engine.containers, engine.undeletable = ["sanduk-hold-ef"], set()
+    assert sweep() == ["sanduk-hold-ef"]
+    assert not list(runs_dir().glob("*.json"))
+
+
+def test_a_failed_delete_orphans_the_record_so_the_owner_can_be_alive(state, engine):
+    """`serve` outlives its wakeups. A record still naming its pid would never
+    be swept while it runs."""
+    claim("apple", "sanduk-abcd").close(gone=False)
+    assert sweep() == ["sanduk-abcd"]
+    claim("apple", "sanduk-abcd").close(gone=True)
+    assert not list(runs_dir().glob("*.json"))
 
 
 def test_a_record_naming_an_unknown_engine_is_left_alone(state):

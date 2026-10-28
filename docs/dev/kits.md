@@ -323,7 +323,7 @@ A recipe's `instructions` land in the user-level file each agent reads on every 
 | hax | `.config/hax/AGENTS.md` | [path.c](https://github.com/OleksandrChekhovskyi/hax/blob/v0.5.0/src/system/path.c#L117-L132) |
 | opencode | `.config/opencode/AGENTS.md`; shadows its `~/.claude/CLAUDE.md` fallback | [instruction.ts](https://github.com/anomalyco/opencode/blob/v1.18.29/packages/opencode/src/session/instruction.ts#L60-L63) |
 | pi | `.pi/agent/AGENTS.md`, in `PI_CODING_AGENT_DIR` | [resource-loader.ts](https://github.com/earendil-works/pi/blob/v0.85.1/packages/coding-agent/src/core/resource-loader.ts#L71-L90) |
-| prime | `.prime/agent/AGENTS.md`, in `PRIME_AGENT_CODING_AGENT_DIR` | [resource-loader.ts](https://github.com/PrimeIntellect-ai/prime-agent/blob/v0.9.5/packages/coding-agent/src/core/resource-loader.ts#L58-L88) |
+| prime | `.prime/agent/AGENTS.md`, in `PRIME_AGENT_CODING_AGENT_DIR` | [resources/mod.rs](https://github.com/PrimeIntellect-ai/prime-agent/blob/v0.10.2/crates/pa-core/src/resources/mod.rs#L39-L42) |
 | hermes | not set: its global file, `~/.hermes/SOUL.md`, replaces the agent's identity rather than adding to it, and a threat scan blanks the whole file on a match | [prompt_builder.py](https://github.com/NousResearch/hermes-agent/blob/v2026.7.20/agent/prompt_builder.py#L1875-L1903) |
 | minima | `.config/minima/AGENTS.md`, from 0.3.0 | [CHANGELOG](https://github.com/shakfu/minima/blob/0.3.0/CHANGELOG.md) |
 

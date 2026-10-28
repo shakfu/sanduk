@@ -710,8 +710,8 @@ def test_a_pi_retry_that_lands_clears_the_attempt_that_did_not():
 
 
 def test_prime_is_pi_in_another_build():
-    """The release tarball's bin is prime-agent and its dependencies are the
-    pi packages, so the reader, the argv and the protocols are inherited."""
+    """0.10's Rust port keeps pi's flags and stream, so the reader, the argv
+    and the protocols are inherited."""
     assert issubclass(Prime, Pi)
     assert Prime.protocols == Pi.protocols
     assert Prime().reader().__class__ is Pi().reader().__class__

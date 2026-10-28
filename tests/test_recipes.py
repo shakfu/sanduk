@@ -509,6 +509,20 @@ def test_each_shipped_agent_gets_its_instructions_or_refuses_them(root, agent):
     assert f"{recipe.home}/{agent.instructions_file}" in out.containerfile
 
 
+@pytest.mark.parametrize("agent", BUILTIN, ids=lambda a: a.name)
+def test_each_shipped_agent_gets_kit_skills_or_refuses_them(root, agent):
+    pin = write_kit(root, "tools", skills={"thing": skill_md("thing")})
+    write_recipe(root, "r", inherits=agent.recipe, kits=[{"name": "tools", "sha256": pin}])
+    recipe = recipes.resolve("r")
+    if agent.skills_dir is None:
+        with pytest.raises(AgentboxError, match="does not know where"):
+            recipes.check(recipe, agent.name, None, "arm64")
+        return
+    recipes.check(recipe, agent.name, agent.skills_dir, "arm64")
+    out = recipes.render_recipe(recipe, agent.skills_dir)
+    assert f"{recipe.home}/{agent.skills_dir}/thing" in out.containerfile
+
+
 # --- lookup -----------------------------------------------------------------
 
 

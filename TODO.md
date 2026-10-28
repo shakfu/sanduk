@@ -48,8 +48,6 @@ Ordered by how much they would change a decision, not by effort.
 
 - [ ] **docker-agent as a kit and recipe target.** Its `toolsets` list is declarative and closed, so a recipe can pin the whole tool surface: a kit installing an stdio MCP server, a recipe pinning it, a config naming it. No other agent allows that; the rest fix their tools in the binary. `--exec --json` and `base_url: ${OPENAI_BASE_URL}` both hold against a stub, and the call is `POST /v1/chat/completions`, already on the relay's route table. Three measurements gate another agent slot: whether `selfupdate` or `toolinstall` fires before the first completion, which decides `sealed`; the layer cost of a 126 MiB binary; and the Anthropic endpoint end to end. See [docs/dev/docker-agent.md](docs/dev/docker-agent.md).
 
-- [ ] **Where prime reads skills.** Its handler has no `skills_dir`, so kits with skills are refused for it. pi reads `~/.agents/skills`; whether PrimeIntellect's build does is not measured.
-
 - [ ] **A long run.** Most runs measured so far finish in ~35s. No agent has exhausted `--max-turns` or run long enough to trigger context compaction.
 
 ### Correctness

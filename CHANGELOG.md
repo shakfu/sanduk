@@ -18,6 +18,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- prime-agent is 0.10.2, its Rust port. Its flags, JSON stream and `models.json` block match the 0.9.5 handler, read from the 0.10.2 source; `agent_settled` is gone, and `agent_end` already ends a run. The image now installs uv 0.13.6 from a pinned archive: `--prime-agent-bootstrap` needs uv to build the kernel, and the Rust binary never installs it, so `PRIME_AGENT_INSTALL_UV` no longer has an effect. x64 uses the plain archive, since 0.10 publishes no baseline build and sets no `target-cpu`.
+
+- Kits with skills work with `--agent prime`. They install into `~/.prime/agent/skills`, which 0.10.2 loads ahead of `~/.agents/skills`. Skills in the mounted directory's `.prime/agent/skills` or `.agents/skills` load first and win a name collision.
+
 - The README has a `What is tested` table, and `--oci-runtime` no longer offers Kata as an example. The flag passes any name to `docker run --runtime`, so naming `io.containerd.kata.v2` read as advice for a runtime nobody here has started; `runsc` is the one measured, in CI on every push.
 
 - `--oci-runtime` says that the pid ceiling may not hold. `Docker.hardening` renders `--pids-limit 1024` whatever starts the container, and Kata drops the field in both its runtimes ([kata-containers#13824](https://github.com/kata-containers/kata-containers/issues/13824)), so under a VM a fork bomb is bounded by the guest's memory instead. The line is printed for any `--oci-runtime`, not for a list of names: the flag takes whatever `daemon.json` calls the runtime. See [docs/dev/microvms.md](docs/dev/microvms.md).
